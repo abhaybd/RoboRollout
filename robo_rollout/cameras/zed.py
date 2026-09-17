@@ -6,8 +6,8 @@ import time
 import pyzed.sl as sl
 import numpy as np
 
-from ai2_robot_infra.cameras.abstract import BaseCamera, CameraException
-from ai2_robot_infra.utils.misc import multi_closing, suppress_decorator
+from robo_rollout.cameras.abstract import BaseCamera, CameraException
+from robo_rollout.utils.misc import multi_closing, suppress_decorator
 
 
 @suppress_decorator(KeyboardInterrupt)

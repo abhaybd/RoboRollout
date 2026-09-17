@@ -6,7 +6,7 @@ import threading
 from google.protobuf.timestamp_pb2 import Timestamp
 import cv2
 
-from ai2_robot_infra.cameras.abstract import BaseCamera
+from robo_rollout.cameras.abstract import BaseCamera
 
 
 class GoProCamera(BaseCamera):

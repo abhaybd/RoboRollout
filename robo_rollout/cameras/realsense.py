@@ -6,7 +6,7 @@ import threading
 import pyrealsense2 as rs
 from google.protobuf.timestamp_pb2 import Timestamp
 
-from ai2_robot_infra.cameras.abstract import BaseCamera
+from robo_rollout.cameras.abstract import BaseCamera
 
 class RealSenseCamera(BaseCamera):
     def __init__(self, camera_id, width=1280, height=720, frame_rate=30, buffer_size=10):

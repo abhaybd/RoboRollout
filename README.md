@@ -11,8 +11,8 @@ This repository contains common robot infrastructure for Ai2 Robotics. This incl
 To use, clone and install this repository:
 
 ```bash
-git clone https://github.com/allenai/ai2_robot_infra.git
-cd ai2_robot_infra
+git clone https://github.com/abhaybd/RoboRollout.git
+cd robo_rollout
 pip install -e .
 ```
 
