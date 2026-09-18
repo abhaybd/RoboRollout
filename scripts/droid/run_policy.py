@@ -100,6 +100,45 @@ def get_robot_state(robot: RobotInterface, gripper: GripperInterface):
     }
 
 
+def save_video(cfg, output_dir, cam_name, frame_deque):
+    frame_list = list(frame_deque)
+    frame_deque.clear()  # empty deque to free memory
+
+    if len(frame_list) > 0:
+        video_path = output_dir / f"{cam_name}.mp4"
+        video_clip = ImageSequenceClip(frame_list, fps=1.0 / cfg.policy_dt)
+        video_clip.write_videofile(str(video_path), codec="libx264", audio=False)
+        print(f"Saving video of {cam_name} to {video_path}")
+        del frame_list
+
+        if cfg.wandb.enabled:
+            return wandb.Video(
+                video_path,
+                caption=cam_name,
+                format="mp4",
+            )
+    return None
+
+
+def flatten_dict(d, pfx=""):
+    ret = {}
+    for k, v in d.items():
+        if isinstance(v, dict):
+            ret.update(flatten_dict(v, f"{pfx}{k}/"))
+        else:
+            ret[f"{pfx}{k}"] = v
+    return ret
+
+
+def lod_to_dol(lod):
+    ret = defaultdict(list)
+    for d in lod:
+        flat_d = flatten_dict(d)
+        for k, v in flat_d.items():
+            ret[k].append(v)
+    return dict(ret)
+
+
 @hydra.main(version_base=None, config_path=".", config_name="config")
 def main(cfg: DictConfig):
     if missing_keys := OmegaConf.missing_keys(cfg):
@@ -160,13 +199,16 @@ def main(cfg: DictConfig):
 
         last_gripper_cmd = MAX_GRIP_WIDTH
 
-        cam_frames = defaultdict(deque)
+        observations = []
+        actions = []
+        cam_frames = defaultdict(deque)  # in sync with saved actions
+        cam_frames_rt = defaultdict(deque)  # not in sync with saved actions  (e.g. due to overruns)
         n_steps = 0
 
         def capture_frames():
             for cam_name, camera in cameras.items():
                 frame = camera.get_frame()
-                cam_frames[cam_name].append(frame)
+                cam_frames_rt[cam_name].append(frame)
 
         def get_obs():
             obs = {
@@ -175,11 +217,13 @@ def main(cfg: DictConfig):
 
             with measure_elapsed() as elapsed_robot:
                 robot_state = get_robot_state(robot, gripper)
+                observations.append(robot_state)
                 obs.update(robot_state)
 
             with measure_elapsed() as elapsed_cam:
                 for cam_name, camera in cameras.items():
                     frame = camera.get_frame()
+                    cam_frames[cam_name].append(frame)
                     if cfg.image_input.method == "center_pad":
                         frame_resized = resize_with_pad(
                             frame, cfg.image_input.height, cfg.image_input.width
@@ -208,7 +252,8 @@ def main(cfg: DictConfig):
                             "Camera failure detected, constant color frames"
                         )
 
-                    obs[cam_name] = frame_resized
+                    if "exo" not in cam_name or cam_name == cfg.policy_cameras.exo_camera:
+                        obs[cam_name] = frame_resized
 
             obs_timing = {
                 "elapsed_cam": elapsed_cam.value,
@@ -238,6 +283,8 @@ def main(cfg: DictConfig):
                         obs["qpos"]["arm"]
                         + (cmd_jp_np - obs["qpos"]["arm"]) * action_scale
                     )
+                    action_dict["arm"] = cmd_jp_np
+                    actions.append(action_dict)
 
                     cmd_jp = torch.tensor(cmd_jp_np)
                     cmd_grip_width = (
@@ -301,25 +348,27 @@ def main(cfg: DictConfig):
     }
     video_dict = {}
     for cam_name, frame_deque in cam_frames.items():
-        frame_list = list(frame_deque)
-        frame_deque.clear()  # empty deque to free memory
+        wandb_vid = save_video(cfg, output_dir, cam_name, frame_deque)
+        if wandb_vid is not None:
+            video_dict[f"video/{cam_name}"] = wandb_vid
 
-        if len(frame_list) > 0:
-            video_path = output_dir / f"{cam_name}.mp4"
-            video_clip = ImageSequenceClip(frame_list, fps=1.0 / cfg.policy_dt)
-            video_clip.write_videofile(str(video_path), codec="libx264", audio=False)
-            print(f"Saving video of {cam_name} to {video_path}")
-            del frame_list
-
-            if cfg.wandb.enabled:
-                video_dict[f"video/{cam_name}"] = wandb.Video(
-                    video_path,
-                    caption=cam_name,
-                    format="mp4",
-                )
+    for cam_name, frame_deque in cam_frames_rt.items():
+        wandb_vid = save_video(cfg, output_dir, f"{cam_name}_rt", frame_deque)
+        if wandb_vid is not None:
+            video_dict[f"video/{cam_name}_rt"] = wandb_vid
 
     if cfg.wandb.enabled:
         wandb.log({**info, **video_dict})
+
+    print("Saving observations and actions")
+    observations_dol = lod_to_dol(observations)
+    actions_dol = lod_to_dol(actions)
+    obs_path = output_dir / "observations.npz"
+    act_path = output_dir / "actions.npz"
+    np.savez_compressed(obs_path, **observations_dol)
+    np.savez_compressed(act_path, **actions_dol)
+    wandb.save(obs_path, base_path=obs_path.parent)
+    wandb.save(act_path, base_path=act_path.parent)
 
     (output_dir / "info.json").write_text(json.dumps(info, indent=2))
 

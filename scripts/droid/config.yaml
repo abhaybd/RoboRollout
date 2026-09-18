@@ -1,5 +1,5 @@
 robot:
-  robot_host: ???
+  robot_host: 172.16.0.2
 
   gripper:
     speed: 0.085
@@ -8,7 +8,7 @@ robot:
   cameras:
     wrist_camera:
       type: "zed"
-      id: ???
+      id: 14846828
       width: 1280
       height: 720
       frame_rate: 30
@@ -16,7 +16,15 @@ robot:
       depth: false
     exo_camera_1:
       type: "zed"
-      id: ???
+      id: 31425515
+      width: 1280
+      height: 720
+      frame_rate: 30
+      side: "left"
+      depth: false
+    exo_camera_2:
+      type: "zed"
+      id: 32439448
       width: 1280
       height: 720
       frame_rate: 30
@@ -26,6 +34,9 @@ robot:
 policy_host: "0.0.0.0"
 policy_port: 8000
 policy_dt: 0.066
+policy_cameras:
+  exo_camera: ???
+  wrist_camera: wrist_camera
 action_scale: 1.0
 task: "???"
 
@@ -35,9 +46,9 @@ image_input:
   method: "downsample"
 
 wandb:
-  enabled: false
-  entity: null
-  project: null
+  enabled: true
+  entity: adeshpande-princeton-university
+  project: synthetic-wm-evals
   name: "franka_eval"
   tags: null
   notes: null
