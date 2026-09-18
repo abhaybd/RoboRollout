@@ -284,6 +284,8 @@ def main(cfg: DictConfig):
                         + (cmd_jp_np - obs["qpos"]["arm"]) * action_scale
                     )
                     action_dict["arm"] = cmd_jp_np
+                    action_dict["arm_vel"] = (cmd_jp_np - obs["qpos"]["arm"]) / 0.2
+                    action_dict["arm_vel"] /= np.maximum(np.max(np.abs(action_dict["arm_vel"])), 1.0)
                     actions.append(action_dict)
 
                     cmd_jp = torch.tensor(cmd_jp_np)
