@@ -12,8 +12,8 @@ First, install the [ZED SDK](https://www.stereolabs.com/developers/release), mat
 
 ```bash
 # Create fresh conda env for polymetis
-conda create -n molmobot python=3.8
-conda activate molmobot
+conda create -n roborollout_droid python=3.8
+conda activate roborollout_droid
 conda install -c pytorch -c fair-robotics -c aihabitat -c conda-forge polymetis
 
 # Install ZED SDK python bindings
@@ -60,7 +60,7 @@ If you wish, you can also enable W&B support (upload rollout videos by filling o
     When running the script, the robot will first go to a home position, and then prompt the user to press enter to begin the episode.
     ```bash
     # In terminal 4
-    conda activate molmobot
+    conda activate roborollout_droid
     python scripts/droid/run_policy.py task="put the red mug in the black bowl"
     ```
 
