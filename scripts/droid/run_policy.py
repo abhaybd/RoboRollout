@@ -274,7 +274,8 @@ def main(cfg: DictConfig):
             robot.start_joint_impedance()
             sleep_until = time.monotonic()
             start = time.time()
-            while True:
+            nominal_timeout_steps = int(np.ceil(cfg.nominal_timeout / cfg.policy_dt)) if cfg.nominal_timeout else None
+            while nominal_timeout_steps is None or n_steps < nominal_timeout_steps:
                 with measure_elapsed() as elapsed_obs:
                     obs, obs_timing = get_obs()
                 n_steps += 1
