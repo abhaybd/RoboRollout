@@ -88,6 +88,7 @@ def prompt_success():
 
 def get_robot_state(robot: RobotInterface, gripper: GripperInterface):
     jp = robot.get_joint_positions().numpy()
+    ee_pos, ee_quat = [x.numpy() for x in robot.get_ee_pose()]
     grip_width = gripper.get_state().width
     # transform gripper to be as expected by molmospaces
     grip_normalized = np.clip(grip_width / MAX_GRIP_WIDTH, 0.0, 1.0)
@@ -97,6 +98,10 @@ def get_robot_state(robot: RobotInterface, gripper: GripperInterface):
             "arm": jp,
             "gripper": gripper_input,
         },
+        "ee_pose": {
+            "pos": ee_pos,
+            "quat": ee_quat,
+        }
     }
 
 
