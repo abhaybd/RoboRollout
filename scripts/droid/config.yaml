@@ -35,7 +35,7 @@ policy_host: "0.0.0.0"
 policy_port: 8000
 policy_dt: 0.066
 policy_cameras:
-  exo_camera: ???
+  exo_camera_1: ???
   wrist_camera: wrist_camera
 nominal_timeout: 45.0
 action_scale: 1.0

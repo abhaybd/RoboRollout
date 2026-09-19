@@ -65,10 +65,13 @@ def cleanup_cameras(cam_dict: Dict[str, BaseCamera]):
     try:
         yield
     finally:
-        print("Closing cameras...")
-        for cam_name, camera in cam_dict.items():
-            print(f"\tClosing camera {cam_name}...")
-            camera.close()
+        try:
+            print("Closing cameras...")
+            for cam_name, camera in cam_dict.items():
+                print(f"\tClosing camera {cam_name}...")
+                camera.close()
+        except KeyboardInterrupt:
+            pass
 
 
 def prompt_success():
@@ -226,6 +229,7 @@ def main(cfg: DictConfig):
                 obs.update(robot_state)
 
             with measure_elapsed() as elapsed_cam:
+                curr_camera_frames = {}
                 for cam_name, camera in cameras.items():
                     frame = camera.get_frame()
                     cam_frames[cam_name].append(frame)
@@ -257,8 +261,10 @@ def main(cfg: DictConfig):
                             "Camera failure detected, constant color frames"
                         )
 
-                    if "exo" not in cam_name or cam_name == cfg.policy_cameras.exo_camera:
-                        obs[cam_name] = frame_resized
+                    curr_camera_frames[cam_name] = frame_resized
+
+                for obs_cam_name, cam_name in cfg.policy_cameras.items():
+                    obs[obs_cam_name] = curr_camera_frames[cam_name]
 
             obs_timing = {
                 "elapsed_cam": elapsed_cam.value,
