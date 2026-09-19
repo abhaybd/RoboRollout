@@ -349,8 +349,9 @@ def main(cfg: DictConfig):
                 print("Stopping frame capture task...")
                 frame_capture_task.stop()
 
+        success = prompt_success()
+
     episode_length = time.time() - start
-    success = prompt_success()
 
     info = {
         "episode_length": episode_length,
@@ -381,8 +382,10 @@ def main(cfg: DictConfig):
     act_path = output_dir / "actions.npz"
     np.savez_compressed(obs_path, **observations_dol)
     np.savez_compressed(act_path, **actions_dol)
-    wandb.save(obs_path, base_path=obs_path.parent)
-    wandb.save(act_path, base_path=act_path.parent)
+
+    if cfg.wandb.enabled:
+        wandb.save(obs_path, base_path=obs_path.parent)
+        wandb.save(act_path, base_path=act_path.parent)
 
     (output_dir / "info.json").write_text(json.dumps(info, indent=2))
 
