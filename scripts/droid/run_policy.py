@@ -1,14 +1,13 @@
-from collections import defaultdict
 import json
 from pathlib import Path
 import time
 from contextlib import contextmanager, suppress
 from typing import Dict
-from collections import deque
 import logging
 import traceback
 
 import hydra
+from ffmpegcv import VideoWriter
 from omegaconf import DictConfig, OmegaConf
 import numpy as np
 from polymetis import RobotInterface, GripperInterface
@@ -20,8 +19,8 @@ from robo_rollout.cameras.abstract import BaseCamera
 from robo_rollout.policy.policy_client import PolicyClient
 from robo_rollout.cameras.camera import create_camera
 from robo_rollout.utils.image import resize_with_crop, resize_with_pad, downsample
-from robo_rollout.utils.threading import ThreadedPeriodicGetter
-from robo_rollout.utils.misc import lod_to_dol, measure_elapsed
+from robo_rollout.utils.threading import AsyncMultiVideoWriter, ThreadedPeriodicGetter
+from robo_rollout.utils.misc import lod_to_dol, measure_elapsed, multi_closing
 
 
 logging.basicConfig(level=logging.INFO)
@@ -115,6 +114,72 @@ def save_video(cfg, output_dir, cam_name, frame_deque):
     return None
 
 
+def create_writer(cfg, output_dir, cam_name):
+    return VideoWriter(output_dir / f"{cam_name}.mp4", fps=round(1.0 / cfg.policy_dt))
+
+
+def rollout_episode(cfg, policy_client, robot, gripper, get_obs, actions):
+    last_gripper_cmd = MAX_GRIP_WIDTH
+    action_scale: float = cfg.action_scale
+    sleep_until = time.monotonic()
+    nominal_timeout_steps = int(np.ceil(cfg.nominal_timeout / cfg.policy_dt)) if cfg.nominal_timeout else None
+    n_steps = 0
+    while nominal_timeout_steps is None or n_steps < nominal_timeout_steps:
+        with measure_elapsed() as elapsed_obs:
+            obs, obs_timing = get_obs()
+        n_steps += 1
+
+        with measure_elapsed() as elapsed_infer:
+            action_dict = policy_client.infer(obs)
+
+        with measure_elapsed() as elapsed_act:
+            cmd_jp_np = action_dict["arm"]
+            cmd_jp_np = (
+                obs["qpos"]["arm"]
+                + (cmd_jp_np - obs["qpos"]["arm"]) * action_scale
+            )
+            action_dict["arm"] = cmd_jp_np
+            action_dict["arm_vel"] = (cmd_jp_np - obs["qpos"]["arm"]) / 0.2
+            action_dict["arm_vel"] /= np.maximum(np.max(np.abs(action_dict["arm_vel"])), 1.0)
+            actions.append(action_dict)
+
+            cmd_jp = torch.tensor(cmd_jp_np)
+            cmd_grip_width = (
+                1.0 - action_dict["gripper"].item() / 255.0
+            ) * MAX_GRIP_WIDTH
+
+            robot.update_desired_joint_positions(cmd_jp)
+
+            if not np.isclose(cmd_grip_width, last_gripper_cmd, atol=0.002):
+                last_gripper_cmd = cmd_grip_width
+                gripper.goto(
+                    cmd_grip_width, cfg.robot.gripper.speed, cfg.robot.gripper.force, blocking=False
+                )
+
+        sleep_until += cfg.policy_dt
+        curr_time = time.monotonic()
+        if curr_time < sleep_until:
+            time.sleep(sleep_until - curr_time)
+        else:
+            print(f"WARN: Loop overrun by {curr_time - sleep_until:.3f}s")
+            print("Budget violations:")
+            if elapsed_obs.value > get_timing_budget(cfg, "obs"):
+                print(f"  Observation: {elapsed_obs.value:.3f}s")
+                for k, v in obs_timing.items():
+                    name = k.split("_", 1)[-1].title()
+                    print(f"    {name}: {v:.3f}s")
+            if elapsed_infer.value > get_timing_budget(cfg, "infer"):
+                print(f"  Inference: {elapsed_infer.value:.3f}s")
+            if elapsed_act.value > get_timing_budget(cfg, "act"):
+                print(f"  Action: {elapsed_act.value:.3f}s")
+
+            while sleep_until < curr_time:
+                sleep_until += cfg.policy_dt
+            sleep_until -= cfg.policy_dt
+
+    return n_steps
+
+
 @hydra.main(version_base=None, config_path=".", config_name="config")
 def main(cfg: DictConfig):
     if missing_keys := OmegaConf.missing_keys(cfg):
@@ -161,9 +226,7 @@ def main(cfg: DictConfig):
         cameras[cam_name] = camera
 
     print("Opening gripper...")
-    gripper_speed = cfg.robot.gripper.speed
-    gripper_force = cfg.robot.gripper.force
-    gripper.goto(MAX_GRIP_WIDTH, gripper_speed, gripper_force)
+    gripper.goto(MAX_GRIP_WIDTH, cfg.robot.gripper.speed, cfg.robot.gripper.force)
 
     if cfg.autohome.enabled:
         print("Going home...")
@@ -173,18 +236,25 @@ def main(cfg: DictConfig):
     with cleanup_cameras(cameras):
         input("Press Enter to start...")
 
-        last_gripper_cmd = MAX_GRIP_WIDTH
-
         observations = []
         actions = []
-        cam_frames = defaultdict(deque)  # in sync with saved actions
-        cam_frames_rt = defaultdict(deque)  # not in sync with saved actions  (e.g. due to overruns)
-        n_steps = 0
+        rt_video_writer = AsyncMultiVideoWriter({
+            cam_name: create_writer(cfg, output_dir, f"{cam_name}_rt") for cam_name in cameras
+        })
+        video_writer = AsyncMultiVideoWriter({
+            cam_name: create_writer(cfg, output_dir, cam_name) for cam_name in cameras
+        })
+        resize_func = {
+            "center_pad": resize_with_pad,
+            "center_crop": resize_with_crop,
+            "downsample": downsample,
+            "none": lambda x, h, w: x,
+        }[cfg.image_input.method]
 
         def capture_frames():
             for cam_name, camera in cameras.items():
                 frame = camera.get_frame()
-                cam_frames_rt[cam_name].append(frame)
+                rt_video_writer.write(cam_name, frame)
 
         def get_obs():
             obs = {
@@ -200,25 +270,8 @@ def main(cfg: DictConfig):
                 curr_camera_frames = {}
                 for cam_name, camera in cameras.items():
                     frame = camera.get_frame()
-                    cam_frames[cam_name].append(frame)
-                    if cfg.image_input.method == "center_pad":
-                        frame_resized = resize_with_pad(
-                            frame, cfg.image_input.height, cfg.image_input.width
-                        )
-                    elif cfg.image_input.method == "center_crop":
-                        frame_resized = resize_with_crop(
-                            frame, cfg.image_input.height, cfg.image_input.width
-                        )
-                    elif cfg.image_input.method == "downsample":
-                        frame_resized = downsample(
-                            frame, cfg.image_input.height, cfg.image_input.width
-                        )
-                    elif cfg.image_input.method == "none":
-                        frame_resized = frame
-                    else:
-                        raise ValueError(
-                            f"Unkown image rescaling method {cfg.image_input.method}"
-                        )
+                    video_writer.write(cam_name, frame)
+                    frame_resized = resize_func(frame, cfg.image_input.height, cfg.image_input.width)
 
                     frame_std = np.std(np.mean(frame, axis=-1)).item()
                     # Sometimes cameras fail silently and return single-color frames
@@ -240,82 +293,37 @@ def main(cfg: DictConfig):
             }
             return obs, obs_timing
 
-        try:
-            frame_capture_task = ThreadedPeriodicGetter(capture_frames, cfg.policy_dt)
-            frame_capture_task.start()
+        n_steps = 0
+        with multi_closing(rt_video_writer, video_writer):
+            try:
+                frame_capture_task = ThreadedPeriodicGetter(capture_frames, cfg.policy_dt)
+                frame_capture_task.start()
+                start = time.time()
+                robot.start_joint_impedance()
 
-            action_scale: float = cfg.action_scale
-            robot.start_joint_impedance()
-            sleep_until = time.monotonic()
-            start = time.time()
-            nominal_timeout_steps = int(np.ceil(cfg.nominal_timeout / cfg.policy_dt)) if cfg.nominal_timeout else None
-            while nominal_timeout_steps is None or n_steps < nominal_timeout_steps:
-                with measure_elapsed() as elapsed_obs:
-                    obs, obs_timing = get_obs()
-                n_steps += 1
-
-                with measure_elapsed() as elapsed_infer:
-                    action_dict = policy_client.infer(obs)
-
-                with measure_elapsed() as elapsed_act:
-                    cmd_jp_np = action_dict["arm"]
-                    cmd_jp_np = (
-                        obs["qpos"]["arm"]
-                        + (cmd_jp_np - obs["qpos"]["arm"]) * action_scale
-                    )
-                    action_dict["arm"] = cmd_jp_np
-                    action_dict["arm_vel"] = (cmd_jp_np - obs["qpos"]["arm"]) / 0.2
-                    action_dict["arm_vel"] /= np.maximum(np.max(np.abs(action_dict["arm_vel"])), 1.0)
-                    actions.append(action_dict)
-
-                    cmd_jp = torch.tensor(cmd_jp_np)
-                    cmd_grip_width = (
-                        1.0 - action_dict["gripper"].item() / 255.0
-                    ) * MAX_GRIP_WIDTH
-
-                    robot.update_desired_joint_positions(cmd_jp)
-
-                    if not np.isclose(cmd_grip_width, last_gripper_cmd, atol=0.002):
-                        last_gripper_cmd = cmd_grip_width
-                        gripper.goto(
-                            cmd_grip_width, gripper_speed, gripper_force, blocking=False
-                        )
-
-                sleep_until += cfg.policy_dt
-                curr_time = time.monotonic()
-                if curr_time < sleep_until:
-                    time.sleep(sleep_until - curr_time)
-                else:
-                    print(f"WARN: Loop overrun by {curr_time - sleep_until:.3f}s")
-                    print("Budget violations:")
-                    if elapsed_obs.value > get_timing_budget(cfg, "obs"):
-                        print(f"  Observation: {elapsed_obs.value:.3f}s")
-                        for k, v in obs_timing.items():
-                            name = k.split("_", 1)[-1].title()
-                            print(f"    {name}: {v:.3f}s")
-                    if elapsed_infer.value > get_timing_budget(cfg, "infer"):
-                        print(f"  Inference: {elapsed_infer.value:.3f}s")
-                    if elapsed_act.value > get_timing_budget(cfg, "act"):
-                        print(f"  Action: {elapsed_act.value:.3f}s")
-
-                    while sleep_until < curr_time:
-                        sleep_until += cfg.policy_dt
-                    sleep_until -= cfg.policy_dt
-        except KeyboardInterrupt:
-            pass
-        except Exception:
-            traceback.print_exc()
-        finally:
-            with suppress(KeyboardInterrupt):
-                print("Terminating policy...")
-                if robot.is_running_policy():
-                    robot.terminate_current_policy(return_log=False)
-            with suppress(KeyboardInterrupt):
-                print("Closing policy client...")
-                policy_client.close()
-            with suppress(KeyboardInterrupt):
-                print("Stopping frame capture task...")
-                frame_capture_task.stop()
+                n_steps = rollout_episode(
+                    cfg,
+                    policy_client,
+                    robot,
+                    gripper,
+                    get_obs,
+                    actions,
+                )
+            except KeyboardInterrupt:
+                pass
+            except Exception:
+                traceback.print_exc()
+            finally:
+                with suppress(KeyboardInterrupt):
+                    print("Terminating policy...")
+                    if robot.is_running_policy():
+                        robot.terminate_current_policy(return_log=False)
+                with suppress(KeyboardInterrupt):
+                    print("Closing policy client...")
+                    policy_client.close()
+                with suppress(KeyboardInterrupt):
+                    print("Stopping frame capture task...")
+                    frame_capture_task.stop()
 
         success = prompt_success()
 
@@ -329,19 +337,7 @@ def main(cfg: DictConfig):
         "success_rate": float(success),
         "task": cfg.task,
     }
-    video_dict = {}
-    for cam_name, frame_deque in cam_frames.items():
-        wandb_vid = save_video(cfg, output_dir, cam_name, frame_deque)
-        if wandb_vid is not None:
-            video_dict[f"video/{cam_name}"] = wandb_vid
-
-    for cam_name, frame_deque in cam_frames_rt.items():
-        wandb_vid = save_video(cfg, output_dir, f"{cam_name}_rt", frame_deque)
-        if wandb_vid is not None:
-            video_dict[f"video/{cam_name}_rt"] = wandb_vid
-
-    if cfg.wandb.enabled:
-        wandb.log({**info, **video_dict})
+    (output_dir / "info.json").write_text(json.dumps(info, indent=2))
 
     print("Saving observations and actions")
     observations_dol = lod_to_dol(observations)
@@ -352,10 +348,23 @@ def main(cfg: DictConfig):
     np.savez_compressed(act_path, **actions_dol)
 
     if cfg.wandb.enabled:
+        video_dict = {}
+        for cam_name in cameras:
+            video_dict[f"video/{cam_name}"] = wandb.Video(
+                output_dir / f"{cam_name}.mp4",
+                caption=cam_name,
+                format="mp4",
+            )
+            video_dict[f"video/{cam_name}_rt"] = wandb.Video(
+                output_dir / f"{cam_name}_rt.mp4",
+                caption=cam_name,
+                format="mp4",
+            )
+
+        wandb.run.summary.update({**info, **video_dict})
+
         wandb.save(obs_path, base_path=obs_path.parent)
         wandb.save(act_path, base_path=act_path.parent)
-
-    (output_dir / "info.json").write_text(json.dumps(info, indent=2))
 
 
 if __name__ == "__main__":
