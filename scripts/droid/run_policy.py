@@ -21,6 +21,7 @@ from robo_rollout.policy.policy_client import PolicyClient
 from robo_rollout.cameras.camera import create_camera
 from robo_rollout.utils.image import resize_with_crop, resize_with_pad, downsample
 from robo_rollout.utils.threading import ThreadedPeriodicGetter
+from robo_rollout.utils.misc import lod_to_dol, measure_elapsed
 
 
 logging.basicConfig(level=logging.INFO)
@@ -35,11 +36,6 @@ TIMING_BUDGETS = {
 }
 
 
-class MutableNullableFloat:
-    def __init__(self):
-        self.value: float | None = None
-
-
 def get_timing_budget(config: DictConfig, name: str) -> float:
     """
     Get the timing budget for a given step.
@@ -49,15 +45,6 @@ def get_timing_budget(config: DictConfig, name: str) -> float:
     if name in TIMING_BUDGETS:
         return TIMING_BUDGETS[name]
     return max(0.0, config.policy_dt - sum(TIMING_BUDGETS.values()))
-
-
-@contextmanager
-def measure_elapsed():
-    start_time = time.monotonic()
-    mnf = MutableNullableFloat()
-    yield mnf
-    end_time = time.monotonic()
-    mnf.value = end_time - start_time
 
 
 @contextmanager
@@ -126,25 +113,6 @@ def save_video(cfg, output_dir, cam_name, frame_deque):
                 format="mp4",
             )
     return None
-
-
-def flatten_dict(d, pfx=""):
-    ret = {}
-    for k, v in d.items():
-        if isinstance(v, dict):
-            ret.update(flatten_dict(v, f"{pfx}{k}/"))
-        else:
-            ret[f"{pfx}{k}"] = v
-    return ret
-
-
-def lod_to_dol(lod):
-    ret = defaultdict(list)
-    for d in lod:
-        flat_d = flatten_dict(d)
-        for k, v in flat_d.items():
-            ret[k].append(v)
-    return dict(ret)
 
 
 @hydra.main(version_base=None, config_path=".", config_name="config")
