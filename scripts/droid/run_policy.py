@@ -255,7 +255,7 @@ def main(cfg: DictConfig):
                     frame_std = np.std(np.mean(frame, axis=-1)).item()
                     # Sometimes cameras fail silently and return single-color frames
                     if frame_std < 1.0:
-                        if "camera_failure" not in wandb.run.tags:
+                        if cfg.wandb.enabled and "camera_failure" not in wandb.run.tags:
                             wandb.run.tags = wandb.run.tags + ("camera_failure",)
                         raise ValueError(
                             "Camera failure detected, constant color frames"

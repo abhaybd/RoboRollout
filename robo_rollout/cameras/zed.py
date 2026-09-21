@@ -115,20 +115,23 @@ class ZedCamera(BaseCamera):
         return ret
 
     def close(self):
-        self._stop_event.set()
-        self._capture_proc.join()
-        self._curr_frame_shm.close()
-        self._curr_frame_shm.unlink()
+        if self._curr_frame is None:
+            return
 
-    def __del__(self):
         if self._capture_proc.is_alive():
             self._stop_event.set()
             self._capture_proc.join(timeout=5)
             if self._capture_proc.is_alive():
                 self._capture_proc.kill()
                 self._capture_proc.join()
-        try:
+
+        with self._frame_lock:
+            self._curr_frame = None
             self._curr_frame_shm.close()
-            self._curr_frame_shm.unlink()
-        except FileNotFoundError:
-            pass
+            try:
+                self._curr_frame_shm.unlink()
+            except FileNotFoundError:
+                pass
+
+    def __del__(self):
+        self.close()
