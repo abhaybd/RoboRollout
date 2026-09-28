@@ -1,4 +1,4 @@
-from queue import Queue
+from queue import Empty, Queue
 from typing import Callable, Any, Dict, Optional, Tuple
 import threading
 import time
@@ -20,7 +20,8 @@ class ThreadedPeriodicGetter:
 
     def stop(self, wait: bool = True):
         self._stop_event.set()
-        if wait:
+        # check ident to avoid join() before start() causing crash
+        if wait and self._thread.ident is not None:
             self._thread.join()
 
     def _run(self):
@@ -57,7 +58,16 @@ class AsyncMultiVideoWriter:
         with self._lock:
             if self._closed:
                 raise RuntimeError(f"{__class__.__name__} is closed")
+            if self._write_error is not None:
+                return
             self._frame_queue.put((cam_name, frame))
+
+    def _discard_pending(self):
+        while True:
+            try:
+                self._frame_queue.get_nowait()
+            except Empty:
+                return
 
     def _run(self):
         while True:
@@ -68,21 +78,29 @@ class AsyncMultiVideoWriter:
             try:
                 self._video_writers[cam_name].write(frame)
             except Exception as exc:
-                # store exception so we can throw on close
-                self._write_error = exc
+                # store exception so we can throw on close, and drop queued
+                # frames so a dead writer cannot grow memory for the rest of the episode
+                with self._lock:
+                    self._write_error = exc
+                self._discard_pending()
                 break
 
     def close(self):
         with self._lock:
-            if not self._closed:
-                self._closed = True
-                self._frame_queue.put(None)
+            if self._closed:
+                return
+            self._closed = True
+            self._frame_queue.put(None)
         self._thread.join()
+        error = self._write_error
+        self._write_error = None
         for writer in self._video_writers.values():
-            writer.close()
-        if self._write_error is not None:
-            error = self._write_error
-            self._write_error = None
+            try:
+                writer.close()
+            except Exception as exc:
+                if error is None:
+                    error = exc
+        if error is not None:
             raise error
 
     def __del__(self):

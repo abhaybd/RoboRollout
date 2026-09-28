@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 import time
-from contextlib import contextmanager, suppress
+from contextlib import closing, suppress
 from typing import Dict, List, Optional
 import logging
 import traceback
@@ -45,20 +45,6 @@ def get_timing_budget(config: DictConfig, name: str) -> float:
     return max(0.0, config.policy_dt - sum(TIMING_BUDGETS.values()))
 
 
-@contextmanager
-def cleanup_cameras(cam_dict: Dict[str, BaseCamera]):
-    try:
-        yield
-    finally:
-        try:
-            print("Closing cameras...")
-            for cam_name, camera in cam_dict.items():
-                print(f"\tClosing camera {cam_name}...")
-                camera.close()
-        except KeyboardInterrupt:
-            pass
-
-
 def prompt_success():
     try:
         while True:
@@ -94,7 +80,11 @@ def get_robot_state(robot: RobotInterface, gripper: GripperInterface):
 
 
 def create_writer(cfg, output_dir, cam_name):
-    return VideoWriter(output_dir / f"{cam_name}.mp4", fps=round(1.0 / cfg.policy_dt))
+    return VideoWriter(
+        str(output_dir / f"{cam_name}.mp4"),
+        fps=round(1.0 / cfg.policy_dt),
+        pix_fmt="rgb24",
+    )
 
 
 class DroidJointImpedance:
@@ -114,6 +104,7 @@ class DroidRollout:
         self.cameras = cameras
         self.observations = []
         self.actions = []
+        self.n_steps = 0
 
         self.rt_video_writer = AsyncMultiVideoWriter({
             cam_name: create_writer(self.cfg, output_dir, f"{cam_name}_rt") for cam_name in self.cameras
@@ -132,9 +123,8 @@ class DroidRollout:
         self.rt_capture_task.start()
 
     def close(self):
-        self.rt_capture_task.stop()
-        self.rt_video_writer.close()
-        self.video_writer.close()
+        with multi_closing(self.video_writer, self.rt_video_writer):
+            self.rt_capture_task.stop()
 
 
 
@@ -142,6 +132,8 @@ class DroidRolloutRunner:
     def __init__(self, cfg: DictConfig):
         self.cfg = cfg
         self.output_dir = Path(hydra.core.hydra_config.HydraConfig.get().runtime.output_dir)
+        self._episode_idx = 0
+        self.policy_client = None
 
         self._reset_policy()
         self.robot = RobotInterface(
@@ -222,11 +214,6 @@ class DroidRolloutRunner:
         }
         return obs, obs_timing
 
-    def _capture_frames(self, rt_video_writer: AsyncMultiVideoWriter):
-        for cam_name, camera in self.cameras.items():
-            frame = camera.get_frame()
-            rt_video_writer.write(cam_name, frame)
-
     @suppress_decorator(KeyboardInterrupt)
     def _rollout_episode(self, rollout: DroidRollout):
         cfg = self.cfg
@@ -236,11 +223,10 @@ class DroidRolloutRunner:
         action_scale: float = cfg.action_scale
         sleep_until = time.monotonic()
         nominal_timeout_steps = int(np.ceil(cfg.nominal_timeout / cfg.policy_dt)) if cfg.nominal_timeout else None
-        n_steps = 0
-        while nominal_timeout_steps is None or n_steps < nominal_timeout_steps:
+        while nominal_timeout_steps is None or rollout.n_steps < nominal_timeout_steps:
             with measure_elapsed() as elapsed_obs:
                 obs, obs_timing = self.get_obs(rollout.observations, rollout.video_writer)
-            n_steps += 1
+            rollout.n_steps += 1
 
             with measure_elapsed() as elapsed_infer:
                 action_dict = self.policy_client.infer(obs)
@@ -252,11 +238,12 @@ class DroidRolloutRunner:
                     + (cmd_jp_np - obs["qpos"]["arm"]) * action_scale
                 )
                 action_dict["arm"] = cmd_jp_np
+                # convert abs joints to joint vel based on droid conversion
                 action_dict["arm_vel"] = (cmd_jp_np - obs["qpos"]["arm"]) / 0.2
-                action_dict["arm_vel"] /= np.maximum(np.max(np.abs(action_dict["arm_vel"])), 1.0)
                 rollout.actions.append(action_dict)
 
                 cmd_jp = torch.tensor(cmd_jp_np)
+                # transform gripper from mlspaces convention to droid
                 cmd_grip_width = (
                     1.0 - action_dict["gripper"].item() / 255.0
                 ) * MAX_GRIP_WIDTH
@@ -290,14 +277,15 @@ class DroidRolloutRunner:
                     sleep_until += cfg.policy_dt
                 sleep_until -= cfg.policy_dt
 
-        return n_steps
-
     def rollout_episode(self, task: Optional[str]):
         if task:
             with open_dict(self.cfg):
                 self.cfg.task = task
         cfg = self.cfg
         self._reset_policy()
+        episode_dir = self.output_dir / f"episode_{self._episode_idx:04d}"
+        self._episode_idx += 1
+        episode_dir.mkdir(parents=True, exist_ok=True)
 
         if cfg.wandb.enabled:
             wandb_cfg = OmegaConf.to_container(cfg, resolve=True)
@@ -306,7 +294,7 @@ class DroidRolloutRunner:
                 entity=cfg.wandb.entity,
                 project=cfg.wandb.project,
                 name=cfg.wandb.name,
-                dir=str(self.output_dir),
+                dir=str(episode_dir),
                 tags=cfg.wandb.tags,
                 config=wandb_cfg,
                 notes=cfg.wandb.notes or cfg.task,
@@ -315,19 +303,23 @@ class DroidRolloutRunner:
             wandb_run = None
 
         try:
-            n_steps = 0
             joint_impedance = DroidJointImpedance(self.robot)
-            rollout = DroidRollout(self.cfg, self.output_dir, self.cameras)
+            rollout = DroidRollout(self.cfg, episode_dir, self.cameras)
             start = time.time()
-            with multi_closing(rollout, joint_impedance):
-                try:
-                    n_steps = self._rollout_episode(rollout)
-                except Exception:
-                    traceback.print_exc()
+            try:
+                with multi_closing(rollout, joint_impedance):
+                    try:
+                        self._rollout_episode(rollout)
+                    except Exception:
+                        traceback.print_exc()
+            except Exception:
+                # Report closing failures without crashing
+                traceback.print_exc()
 
             success = prompt_success()
 
             episode_length = time.time() - start
+            n_steps = rollout.n_steps
 
             info = {
                 "episode_length": episode_length,
@@ -337,13 +329,13 @@ class DroidRolloutRunner:
                 "success_rate": float(success),
                 "task": cfg.task,
             }
-            (self.output_dir / "info.json").write_text(json.dumps(info, indent=2))
+            (episode_dir / "info.json").write_text(json.dumps(info, indent=2))
 
             print("Saving observations and actions")
             observations_dol = lod_to_dol(rollout.observations)
             actions_dol = lod_to_dol(rollout.actions)
-            obs_path = self.output_dir / "observations.npz"
-            act_path = self.output_dir / "actions.npz"
+            obs_path = episode_dir / "observations.npz"
+            act_path = episode_dir / "actions.npz"
             np.savez_compressed(obs_path, **observations_dol)
             np.savez_compressed(act_path, **actions_dol)
 
@@ -351,12 +343,12 @@ class DroidRolloutRunner:
                 video_dict = {}
                 for cam_name in self.cameras:
                     video_dict[f"video/{cam_name}"] = wandb.Video(
-                        self.output_dir / f"{cam_name}.mp4",
+                        episode_dir / f"{cam_name}.mp4",
                         caption=cam_name,
                         format="mp4",
                     )
                     video_dict[f"video/{cam_name}_rt"] = wandb.Video(
-                        self.output_dir / f"{cam_name}_rt.mp4",
+                        episode_dir / f"{cam_name}_rt.mp4",
                         caption=cam_name,
                         format="mp4",
                     )
@@ -386,13 +378,12 @@ def main(cfg: DictConfig):
     print("Evaluation Configuration:")
     print(OmegaConf.to_yaml(cfg))
 
-    rollout_runner = DroidRolloutRunner(cfg)
-
-    with suppress(KeyboardInterrupt):
-        while True:
-            rollout_runner.reset_robot()
-            task = input(f"Enter task or leave empty to use default \"{cfg.task}\" (ctrl+c to exit): ").strip()
-            rollout_runner.rollout_episode(task)
+    with closing(DroidRolloutRunner(cfg)) as rollout_runner:
+        with suppress(KeyboardInterrupt):
+            while True:
+                rollout_runner.reset_robot()
+                task = input(f"Enter task or leave empty to use default \"{cfg.task}\" (ctrl+c to exit): ").strip()
+                rollout_runner.rollout_episode(task)
 
 if __name__ == "__main__":
     main()
