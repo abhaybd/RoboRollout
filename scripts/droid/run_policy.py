@@ -2,17 +2,16 @@ import json
 from pathlib import Path
 import time
 from contextlib import contextmanager, suppress
-from typing import Dict
+from typing import Dict, List, Optional
 import logging
 import traceback
 
 import hydra
 from ffmpegcv import VideoWriter
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, open_dict
 import numpy as np
 from polymetis import RobotInterface, GripperInterface
 import torch
-from moviepy.video.io.ImageSequenceClip import ImageSequenceClip
 import wandb
 
 from robo_rollout.cameras.abstract import BaseCamera
@@ -20,7 +19,7 @@ from robo_rollout.policy.policy_client import PolicyClient
 from robo_rollout.cameras.camera import create_camera
 from robo_rollout.utils.image import resize_with_crop, resize_with_pad, downsample
 from robo_rollout.utils.threading import AsyncMultiVideoWriter, ThreadedPeriodicGetter
-from robo_rollout.utils.misc import lod_to_dol, measure_elapsed, multi_closing
+from robo_rollout.utils.misc import lod_to_dol, measure_elapsed, multi_closing, suppress_decorator
 
 
 logging.basicConfig(level=logging.INFO)
@@ -94,90 +93,289 @@ def get_robot_state(robot: RobotInterface, gripper: GripperInterface):
     }
 
 
-def save_video(cfg, output_dir, cam_name, frame_deque):
-    frame_list = list(frame_deque)
-    frame_deque.clear()  # empty deque to free memory
-
-    if len(frame_list) > 0:
-        video_path = output_dir / f"{cam_name}.mp4"
-        video_clip = ImageSequenceClip(frame_list, fps=1.0 / cfg.policy_dt)
-        video_clip.write_videofile(str(video_path), codec="libx264", audio=False)
-        print(f"Saving video of {cam_name} to {video_path}")
-        del frame_list
-
-        if cfg.wandb.enabled:
-            return wandb.Video(
-                video_path,
-                caption=cam_name,
-                format="mp4",
-            )
-    return None
-
-
 def create_writer(cfg, output_dir, cam_name):
     return VideoWriter(output_dir / f"{cam_name}.mp4", fps=round(1.0 / cfg.policy_dt))
 
 
-def rollout_episode(cfg, policy_client, robot, gripper, get_obs, actions):
-    last_gripper_cmd = MAX_GRIP_WIDTH
-    action_scale: float = cfg.action_scale
-    sleep_until = time.monotonic()
-    nominal_timeout_steps = int(np.ceil(cfg.nominal_timeout / cfg.policy_dt)) if cfg.nominal_timeout else None
-    n_steps = 0
-    while nominal_timeout_steps is None or n_steps < nominal_timeout_steps:
-        with measure_elapsed() as elapsed_obs:
-            obs, obs_timing = get_obs()
-        n_steps += 1
+class DroidJointImpedance:
+    def __init__(self, robot: RobotInterface):
+        self.robot = robot
+        self.robot.start_joint_impedance()
 
-        with measure_elapsed() as elapsed_infer:
-            action_dict = policy_client.infer(obs)
+    @suppress_decorator(KeyboardInterrupt)
+    def close(self):
+        if self.robot.is_running_policy():
+            self.robot.terminate_current_policy(return_log=False)
 
-        with measure_elapsed() as elapsed_act:
-            cmd_jp_np = action_dict["arm"]
-            cmd_jp_np = (
-                obs["qpos"]["arm"]
-                + (cmd_jp_np - obs["qpos"]["arm"]) * action_scale
-            )
-            action_dict["arm"] = cmd_jp_np
-            action_dict["arm_vel"] = (cmd_jp_np - obs["qpos"]["arm"]) / 0.2
-            action_dict["arm_vel"] /= np.maximum(np.max(np.abs(action_dict["arm_vel"])), 1.0)
-            actions.append(action_dict)
 
-            cmd_jp = torch.tensor(cmd_jp_np)
-            cmd_grip_width = (
-                1.0 - action_dict["gripper"].item() / 255.0
-            ) * MAX_GRIP_WIDTH
+class DroidRollout:
+    def __init__(self, cfg: DictConfig, output_dir: Path, cameras: Dict[str, BaseCamera]):
+        self.cfg = cfg
+        self.cameras = cameras
+        self.observations = []
+        self.actions = []
 
-            robot.update_desired_joint_positions(cmd_jp)
+        self.rt_video_writer = AsyncMultiVideoWriter({
+            cam_name: create_writer(self.cfg, output_dir, f"{cam_name}_rt") for cam_name in self.cameras
+        })
+        self.video_writer = AsyncMultiVideoWriter({
+            cam_name: create_writer(self.cfg, output_dir, cam_name) for cam_name in self.cameras
+        })
+        self.rt_capture_task = ThreadedPeriodicGetter(self._capture_rt_frames, self.cfg.policy_dt)
 
-            if not np.isclose(cmd_grip_width, last_gripper_cmd, atol=0.002):
-                last_gripper_cmd = cmd_grip_width
-                gripper.goto(
-                    cmd_grip_width, cfg.robot.gripper.speed, cfg.robot.gripper.force, blocking=False
+    def _capture_rt_frames(self):
+        for cam_name, camera in self.cameras.items():
+            frame = camera.get_frame()
+            self.rt_video_writer.write(cam_name, frame)
+
+    def start_rt_capture(self):
+        self.rt_capture_task.start()
+
+    def close(self):
+        self.rt_capture_task.stop()
+        self.rt_video_writer.close()
+        self.video_writer.close()
+
+
+
+class DroidRolloutRunner:
+    def __init__(self, cfg: DictConfig):
+        self.cfg = cfg
+        self.output_dir = Path(hydra.core.hydra_config.HydraConfig.get().runtime.output_dir)
+
+        self._reset_policy()
+        self.robot = RobotInterface(
+            ip_address=cfg.robot.robot_host,
+            enforce_version=False,
+        )
+        self.gripper = GripperInterface(ip_address=cfg.robot.robot_host)
+
+        self.resize_func = {
+            "center_pad": resize_with_pad,
+            "center_crop": resize_with_crop,
+            "downsample": downsample,
+            "none": lambda x, h, w: x,
+        }[cfg.image_input.method]
+
+        print("Opening cameras...")
+        self.cameras: dict[str, BaseCamera] = {}
+        for cam_name, camera_cfg in cfg.robot.cameras.items():
+            try:
+                camera = create_camera(camera_cfg)
+            except:
+                for cam in self.cameras.values():
+                    cam.close()
+                raise
+            self.cameras[cam_name] = camera
+
+    def _reset_policy(self):
+        if self.policy_client is not None:
+            self.policy_client.close()
+        self.policy_client = PolicyClient(host=self.cfg.policy_host, port=self.cfg.policy_port)
+        self.metadata = self.policy_client.get_server_metadata()
+        print("Server metadata:")
+        print(json.dumps(self.metadata, indent=2))
+
+    def reset_robot(self):
+        print("Opening gripper...")
+        self.gripper.goto(MAX_GRIP_WIDTH, self.cfg.robot.gripper.speed, self.cfg.robot.gripper.force)
+
+        if self.cfg.autohome.enabled:
+            print("Going home...")
+            home_jp = torch.tensor(self.cfg.autohome.home_jointpos)
+            self.robot.move_to_joint_positions(home_jp, self.cfg.autohome.duration)
+
+    def get_obs(self, observations: List, video_writer: AsyncMultiVideoWriter):
+        obs = {
+            "task": self.cfg.task,
+        }
+
+        with measure_elapsed() as elapsed_robot:
+            robot_state = get_robot_state(self.robot, self.gripper)
+            observations.append(robot_state)
+            obs.update(robot_state)
+
+        with measure_elapsed() as elapsed_cam:
+            curr_camera_frames = {}
+            for cam_name, camera in self.cameras.items():
+                frame = camera.get_frame()
+                video_writer.write(cam_name, frame)
+                frame_resized = self.resize_func(frame, self.cfg.image_input.height, self.cfg.image_input.width)
+
+                frame_std = np.std(np.mean(frame, axis=-1)).item()
+                # Sometimes cameras fail silently and return single-color frames
+                if frame_std < 1.0:
+                    if self.cfg.wandb.enabled and "camera_failure" not in wandb.run.tags:
+                        wandb.run.tags = wandb.run.tags + ("camera_failure",)
+                    raise ValueError(
+                        "Camera failure detected, constant color frames"
+                    )
+
+                curr_camera_frames[cam_name] = frame_resized
+
+            for obs_cam_name, cam_name in self.cfg.policy_cameras.items():
+                obs[obs_cam_name] = curr_camera_frames[cam_name]
+
+        obs_timing = {
+            "elapsed_cam": elapsed_cam.value,
+            "elapsed_robot": elapsed_robot.value,
+        }
+        return obs, obs_timing
+
+    def _capture_frames(self, rt_video_writer: AsyncMultiVideoWriter):
+        for cam_name, camera in self.cameras.items():
+            frame = camera.get_frame()
+            rt_video_writer.write(cam_name, frame)
+
+    @suppress_decorator(KeyboardInterrupt)
+    def _rollout_episode(self, rollout: DroidRollout):
+        cfg = self.cfg
+        rollout.start_rt_capture()
+
+        last_gripper_cmd = MAX_GRIP_WIDTH
+        action_scale: float = cfg.action_scale
+        sleep_until = time.monotonic()
+        nominal_timeout_steps = int(np.ceil(cfg.nominal_timeout / cfg.policy_dt)) if cfg.nominal_timeout else None
+        n_steps = 0
+        while nominal_timeout_steps is None or n_steps < nominal_timeout_steps:
+            with measure_elapsed() as elapsed_obs:
+                obs, obs_timing = self.get_obs(rollout.observations, rollout.video_writer)
+            n_steps += 1
+
+            with measure_elapsed() as elapsed_infer:
+                action_dict = self.policy_client.infer(obs)
+
+            with measure_elapsed() as elapsed_act:
+                cmd_jp_np = action_dict["arm"]
+                cmd_jp_np = (
+                    obs["qpos"]["arm"]
+                    + (cmd_jp_np - obs["qpos"]["arm"]) * action_scale
                 )
+                action_dict["arm"] = cmd_jp_np
+                action_dict["arm_vel"] = (cmd_jp_np - obs["qpos"]["arm"]) / 0.2
+                action_dict["arm_vel"] /= np.maximum(np.max(np.abs(action_dict["arm_vel"])), 1.0)
+                rollout.actions.append(action_dict)
 
-        sleep_until += cfg.policy_dt
-        curr_time = time.monotonic()
-        if curr_time < sleep_until:
-            time.sleep(sleep_until - curr_time)
+                cmd_jp = torch.tensor(cmd_jp_np)
+                cmd_grip_width = (
+                    1.0 - action_dict["gripper"].item() / 255.0
+                ) * MAX_GRIP_WIDTH
+
+                self.robot.update_desired_joint_positions(cmd_jp)
+
+                if not np.isclose(cmd_grip_width, last_gripper_cmd, atol=0.002):
+                    last_gripper_cmd = cmd_grip_width
+                    self.gripper.goto(
+                        cmd_grip_width, cfg.robot.gripper.speed, cfg.robot.gripper.force, blocking=False
+                    )
+
+            sleep_until += cfg.policy_dt
+            curr_time = time.monotonic()
+            if curr_time < sleep_until:
+                time.sleep(sleep_until - curr_time)
+            else:
+                print(f"WARN: Loop overrun by {curr_time - sleep_until:.3f}s")
+                print("Budget violations:")
+                if elapsed_obs.value > get_timing_budget(cfg, "obs"):
+                    print(f"  Observation: {elapsed_obs.value:.3f}s")
+                    for k, v in obs_timing.items():
+                        name = k.split("_", 1)[-1].title()
+                        print(f"    {name}: {v:.3f}s")
+                if elapsed_infer.value > get_timing_budget(cfg, "infer"):
+                    print(f"  Inference: {elapsed_infer.value:.3f}s")
+                if elapsed_act.value > get_timing_budget(cfg, "act"):
+                    print(f"  Action: {elapsed_act.value:.3f}s")
+
+                while sleep_until < curr_time:
+                    sleep_until += cfg.policy_dt
+                sleep_until -= cfg.policy_dt
+
+        return n_steps
+
+    def rollout_episode(self, task: Optional[str]):
+        if task:
+            with open_dict(self.cfg):
+                self.cfg.task = task
+        cfg = self.cfg
+        self._reset_policy()
+
+        if cfg.wandb.enabled:
+            wandb_cfg = OmegaConf.to_container(cfg, resolve=True)
+            wandb_cfg["policy_metadata"] = self.metadata
+            wandb_run = wandb.init(
+                entity=cfg.wandb.entity,
+                project=cfg.wandb.project,
+                name=cfg.wandb.name,
+                dir=str(self.output_dir),
+                tags=cfg.wandb.tags,
+                config=wandb_cfg,
+                notes=cfg.wandb.notes or cfg.task,
+            )
         else:
-            print(f"WARN: Loop overrun by {curr_time - sleep_until:.3f}s")
-            print("Budget violations:")
-            if elapsed_obs.value > get_timing_budget(cfg, "obs"):
-                print(f"  Observation: {elapsed_obs.value:.3f}s")
-                for k, v in obs_timing.items():
-                    name = k.split("_", 1)[-1].title()
-                    print(f"    {name}: {v:.3f}s")
-            if elapsed_infer.value > get_timing_budget(cfg, "infer"):
-                print(f"  Inference: {elapsed_infer.value:.3f}s")
-            if elapsed_act.value > get_timing_budget(cfg, "act"):
-                print(f"  Action: {elapsed_act.value:.3f}s")
+            wandb_run = None
 
-            while sleep_until < curr_time:
-                sleep_until += cfg.policy_dt
-            sleep_until -= cfg.policy_dt
+        try:
+            n_steps = 0
+            joint_impedance = DroidJointImpedance(self.robot)
+            rollout = DroidRollout(self.cfg, self.output_dir, self.cameras)
+            start = time.time()
+            with multi_closing(rollout, joint_impedance):
+                try:
+                    n_steps = self._rollout_episode(rollout)
+                except Exception:
+                    traceback.print_exc()
 
-    return n_steps
+            success = prompt_success()
+
+            episode_length = time.time() - start
+
+            info = {
+                "episode_length": episode_length,
+                "episode_length_nominal": n_steps * cfg.policy_dt,
+                "episode_length_steps": n_steps,
+                "success": success,
+                "success_rate": float(success),
+                "task": cfg.task,
+            }
+            (self.output_dir / "info.json").write_text(json.dumps(info, indent=2))
+
+            print("Saving observations and actions")
+            observations_dol = lod_to_dol(rollout.observations)
+            actions_dol = lod_to_dol(rollout.actions)
+            obs_path = self.output_dir / "observations.npz"
+            act_path = self.output_dir / "actions.npz"
+            np.savez_compressed(obs_path, **observations_dol)
+            np.savez_compressed(act_path, **actions_dol)
+
+            if wandb_run is not None:
+                video_dict = {}
+                for cam_name in self.cameras:
+                    video_dict[f"video/{cam_name}"] = wandb.Video(
+                        self.output_dir / f"{cam_name}.mp4",
+                        caption=cam_name,
+                        format="mp4",
+                    )
+                    video_dict[f"video/{cam_name}_rt"] = wandb.Video(
+                        self.output_dir / f"{cam_name}_rt.mp4",
+                        caption=cam_name,
+                        format="mp4",
+                    )
+
+                wandb_run.summary.update({**info, **video_dict})
+
+                wandb_run.save(obs_path, base_path=obs_path.parent)
+                wandb_run.save(act_path, base_path=act_path.parent)
+        finally:
+            if wandb_run is not None:
+                wandb_run.finish()
+
+    def close(self):
+        if self.robot.is_running_policy():
+            self.robot.terminate_current_policy(return_log=False)
+        self.policy_client.close()
+        for cam_name, cam in self.cameras.items():
+            print(f"Closing camera {cam_name}...")
+            cam.close()
 
 
 @hydra.main(version_base=None, config_path=".", config_name="config")
@@ -188,184 +386,13 @@ def main(cfg: DictConfig):
     print("Evaluation Configuration:")
     print(OmegaConf.to_yaml(cfg))
 
-    policy_client = PolicyClient(host=cfg.policy_host, port=cfg.policy_port)
-    metadata = policy_client.get_server_metadata()
-    print("Server metadata:")
-    print(json.dumps(metadata, indent=2))
+    rollout_runner = DroidRolloutRunner(cfg)
 
-    output_dir = Path(hydra.core.hydra_config.HydraConfig.get().runtime.output_dir)
-
-    robot = RobotInterface(
-        ip_address=cfg.robot.robot_host,
-        enforce_version=False,
-    )
-    gripper = GripperInterface(ip_address=cfg.robot.robot_host)
-
-    if cfg.wandb.enabled:
-        wandb_cfg = OmegaConf.to_container(cfg, resolve=True)
-        wandb_cfg["policy_metadata"] = metadata
-        wandb.init(
-            entity=cfg.wandb.entity,
-            project=cfg.wandb.project,
-            name=cfg.wandb.name,
-            dir=str(output_dir),
-            tags=cfg.wandb.tags,
-            config=wandb_cfg,
-            notes=cfg.wandb.notes or cfg.task,
-        )
-
-    print("Opening cameras...")
-    cameras: dict[str, BaseCamera] = {}
-    for cam_name, camera_cfg in cfg.robot.cameras.items():
-        try:
-            camera = create_camera(camera_cfg)
-        except:
-            for cam in cameras.values():
-                cam.close()
-            raise
-        cameras[cam_name] = camera
-
-    print("Opening gripper...")
-    gripper.goto(MAX_GRIP_WIDTH, cfg.robot.gripper.speed, cfg.robot.gripper.force)
-
-    if cfg.autohome.enabled:
-        print("Going home...")
-        home_jp = torch.tensor(cfg.autohome.home_jointpos)
-        robot.move_to_joint_positions(home_jp, cfg.autohome.duration)
-
-    with cleanup_cameras(cameras):
-        input("Press Enter to start...")
-
-        observations = []
-        actions = []
-        rt_video_writer = AsyncMultiVideoWriter({
-            cam_name: create_writer(cfg, output_dir, f"{cam_name}_rt") for cam_name in cameras
-        })
-        video_writer = AsyncMultiVideoWriter({
-            cam_name: create_writer(cfg, output_dir, cam_name) for cam_name in cameras
-        })
-        resize_func = {
-            "center_pad": resize_with_pad,
-            "center_crop": resize_with_crop,
-            "downsample": downsample,
-            "none": lambda x, h, w: x,
-        }[cfg.image_input.method]
-
-        def capture_frames():
-            for cam_name, camera in cameras.items():
-                frame = camera.get_frame()
-                rt_video_writer.write(cam_name, frame)
-
-        def get_obs():
-            obs = {
-                "task": cfg.task,
-            }
-
-            with measure_elapsed() as elapsed_robot:
-                robot_state = get_robot_state(robot, gripper)
-                observations.append(robot_state)
-                obs.update(robot_state)
-
-            with measure_elapsed() as elapsed_cam:
-                curr_camera_frames = {}
-                for cam_name, camera in cameras.items():
-                    frame = camera.get_frame()
-                    video_writer.write(cam_name, frame)
-                    frame_resized = resize_func(frame, cfg.image_input.height, cfg.image_input.width)
-
-                    frame_std = np.std(np.mean(frame, axis=-1)).item()
-                    # Sometimes cameras fail silently and return single-color frames
-                    if frame_std < 1.0:
-                        if cfg.wandb.enabled and "camera_failure" not in wandb.run.tags:
-                            wandb.run.tags = wandb.run.tags + ("camera_failure",)
-                        raise ValueError(
-                            "Camera failure detected, constant color frames"
-                        )
-
-                    curr_camera_frames[cam_name] = frame_resized
-
-                for obs_cam_name, cam_name in cfg.policy_cameras.items():
-                    obs[obs_cam_name] = curr_camera_frames[cam_name]
-
-            obs_timing = {
-                "elapsed_cam": elapsed_cam.value,
-                "elapsed_robot": elapsed_robot.value,
-            }
-            return obs, obs_timing
-
-        n_steps = 0
-        with multi_closing(rt_video_writer, video_writer):
-            try:
-                frame_capture_task = ThreadedPeriodicGetter(capture_frames, cfg.policy_dt)
-                frame_capture_task.start()
-                start = time.time()
-                robot.start_joint_impedance()
-
-                n_steps = rollout_episode(
-                    cfg,
-                    policy_client,
-                    robot,
-                    gripper,
-                    get_obs,
-                    actions,
-                )
-            except KeyboardInterrupt:
-                pass
-            except Exception:
-                traceback.print_exc()
-            finally:
-                with suppress(KeyboardInterrupt):
-                    print("Terminating policy...")
-                    if robot.is_running_policy():
-                        robot.terminate_current_policy(return_log=False)
-                with suppress(KeyboardInterrupt):
-                    print("Closing policy client...")
-                    policy_client.close()
-                with suppress(KeyboardInterrupt):
-                    print("Stopping frame capture task...")
-                    frame_capture_task.stop()
-
-        success = prompt_success()
-
-    episode_length = time.time() - start
-
-    info = {
-        "episode_length": episode_length,
-        "episode_length_nominal": n_steps * cfg.policy_dt,
-        "episode_length_steps": n_steps,
-        "success": success,
-        "success_rate": float(success),
-        "task": cfg.task,
-    }
-    (output_dir / "info.json").write_text(json.dumps(info, indent=2))
-
-    print("Saving observations and actions")
-    observations_dol = lod_to_dol(observations)
-    actions_dol = lod_to_dol(actions)
-    obs_path = output_dir / "observations.npz"
-    act_path = output_dir / "actions.npz"
-    np.savez_compressed(obs_path, **observations_dol)
-    np.savez_compressed(act_path, **actions_dol)
-
-    if cfg.wandb.enabled:
-        video_dict = {}
-        for cam_name in cameras:
-            video_dict[f"video/{cam_name}"] = wandb.Video(
-                output_dir / f"{cam_name}.mp4",
-                caption=cam_name,
-                format="mp4",
-            )
-            video_dict[f"video/{cam_name}_rt"] = wandb.Video(
-                output_dir / f"{cam_name}_rt.mp4",
-                caption=cam_name,
-                format="mp4",
-            )
-
-        wandb.run.summary.update({**info, **video_dict})
-
-        wandb.save(obs_path, base_path=obs_path.parent)
-        wandb.save(act_path, base_path=act_path.parent)
-
+    with suppress(KeyboardInterrupt):
+        while True:
+            rollout_runner.reset_robot()
+            task = input(f"Enter task or leave empty to use default \"{cfg.task}\" (ctrl+c to exit): ").strip()
+            rollout_runner.rollout_episode(task)
 
 if __name__ == "__main__":
     main()
