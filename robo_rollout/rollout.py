@@ -301,7 +301,7 @@ class RolloutRunner:
                     f"video/{video_name}": wandb.Video(video_path, caption=video_name, format="mp4")
                     for video_name, video_path in video_paths.items()
                 }
-                wandb_run.summary.update({**info, **video_dict})
+                wandb_run.log({**info, **video_dict})
 
                 wandb_run.save(obs_path, base_path=obs_path.parent)
                 wandb_run.save(act_path, base_path=act_path.parent)
