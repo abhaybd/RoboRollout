@@ -6,8 +6,12 @@ import threading
 from google.protobuf.timestamp_pb2 import Timestamp
 import cv2
 
-from robo_rollout.cameras.abstract import BaseCamera
+from robo_rollout.cameras.abstract import BaseCamera, CameraException
 from robo_rollout.cameras.config import GoProCameraConfig
+
+
+# error after this many consecutive failed reads
+MAX_CONSECUTIVE_FAILED_READS = 5
 
 
 class GoProCamera(BaseCamera):
@@ -54,11 +58,16 @@ class GoProCamera(BaseCamera):
         return (self.height, self.width, 3)
 
     def _update_images(self):
+        n_failed_reads = 0
         while not self.stop_event.is_set():
             ret, frame = self.cap.read()
 
-            if not ret: 
+            if not ret:
+                n_failed_reads += 1
+                if n_failed_reads >= MAX_CONSECUTIVE_FAILED_READS:
+                    raise CameraException(f"{n_failed_reads} consecutive failed reads from device ID {self.device_id}")
                 continue
+            n_failed_reads = 0
             # Get the dimensions of the frame
             h, w, _ = frame.shape
 
@@ -95,6 +104,8 @@ class GoProCamera(BaseCamera):
             time.sleep(1 / self.frame_rate)
 
     def get_frame(self):
+        if not self.thread.is_alive():
+            raise CameraException(f"Capture thread for device ID {self.device_id} died")
         with self.stack_lock:
             if self.frame_stack:
                 return self.frame_stack[-1].copy()

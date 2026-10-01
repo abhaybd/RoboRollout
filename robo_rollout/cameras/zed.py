@@ -1,6 +1,7 @@
 import multiprocessing.synchronize
 from multiprocessing import Process, Event, Lock
 from multiprocessing.shared_memory import SharedMemory
+import signal
 import time
 
 import pyzed.sl as sl
@@ -8,10 +9,9 @@ import numpy as np
 
 from robo_rollout.cameras.abstract import BaseCamera, CameraException
 from robo_rollout.cameras.config import ZedCameraConfig
-from robo_rollout.utils.misc import multi_closing, suppress_decorator
+from robo_rollout.utils.misc import multi_closing
 
 
-@suppress_decorator(KeyboardInterrupt)
 def _capture_task(
     camera_id,
     width: int,
@@ -24,6 +24,8 @@ def _capture_task(
     frame_lock: multiprocessing.synchronize.Lock,
     shm_name: str,
 ):
+    # Ignore SIGINT since parent will stop this process via stop_event (even upon interrupt)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     assert (width, height) == (1280, 720), "Only HD720 resolution is supported for zed!"
     zed = sl.Camera()
     zed_view = sl.VIEW.LEFT if side == "left" else sl.VIEW.RIGHT
@@ -105,6 +107,8 @@ class ZedCamera(BaseCamera):
         return self._curr_frame.shape
 
     def get_frame(self):
+        if not self._capture_proc.is_alive():
+            raise CameraException(f"Zed capture process died with exit code {self._capture_proc.exitcode}")
         with self._frame_lock:
             ret = self._curr_frame.copy()
         return ret

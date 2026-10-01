@@ -3,8 +3,9 @@ from typing import Callable, Any, Dict, Optional, Tuple
 import threading
 import time
 
-from ffmpegcv import FFmpegWriter
 import numpy as np
+
+from robo_rollout.utils.video import VideoWriter
 
 
 class ThreadedPeriodicGetter:
@@ -43,7 +44,7 @@ class ThreadedPeriodicGetter:
 
 
 class AsyncMultiVideoWriter:
-    def __init__(self, video_writers: Dict[str, FFmpegWriter]):
+    def __init__(self, video_writers: Dict[str, VideoWriter]):
         self._video_writers = video_writers
         self._frame_queue: "Queue[Optional[Tuple[str, np.ndarray]]]" = Queue()
         self._lock = threading.Lock()

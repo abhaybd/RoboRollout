@@ -6,7 +6,7 @@ import threading
 import pyrealsense2 as rs
 from google.protobuf.timestamp_pb2 import Timestamp
 
-from robo_rollout.cameras.abstract import BaseCamera
+from robo_rollout.cameras.abstract import BaseCamera, CameraException
 from robo_rollout.cameras.config import RealSenseCameraConfig
 
 class RealSenseCamera(BaseCamera):
@@ -31,8 +31,8 @@ class RealSenseCamera(BaseCamera):
 
         self.timestamp = Timestamp()
 
-        camera_thread = threading.Thread(target=self.run)
-        camera_thread.start()
+        self.camera_thread = threading.Thread(target=self.run)
+        self.camera_thread.start()
 
         time.sleep(1.0)
 
@@ -108,6 +108,8 @@ class RealSenseCamera(BaseCamera):
                 return None
 
     def get_frame(self):
+        if not self.camera_thread.is_alive():
+            raise CameraException(f"Capture thread for camera {self.camera_id} died")
         return self.get_bgr_image()[..., ::-1]
 
     def get_depth_image(self):

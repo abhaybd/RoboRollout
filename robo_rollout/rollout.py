@@ -9,7 +9,6 @@ import logging
 import traceback
 
 import hydra
-from ffmpegcv import VideoWriter
 from omegaconf import OmegaConf
 import numpy as np
 import wandb
@@ -21,6 +20,7 @@ from robo_rollout.policy.policy_client import PolicyClient
 from robo_rollout.robot import BaseRobot
 from robo_rollout.utils.image import resize_with_crop, resize_with_pad, downsample
 from robo_rollout.utils.threading import AsyncMultiVideoWriter, ThreadedPeriodicGetter
+from robo_rollout.utils.video import VideoWriter
 from robo_rollout.utils.misc import lod_to_dol, measure_elapsed, multi_closing, suppress_decorator
 
 
@@ -75,7 +75,6 @@ def create_writer(cfg: RolloutConfig, output_dir: Path, cam_name: str):
     return VideoWriter(
         str(output_dir / f"{cam_name}.mp4"),
         fps=round(1.0 / cfg.policy_dt),
-        pix_fmt="rgb24",
     )
 
 

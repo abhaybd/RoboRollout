@@ -11,6 +11,9 @@ from robo_rollout.cameras.config import V4LCameraConfig
 
 log = logging.getLogger(__name__)
 
+# error after this many consecutive failed reads
+MAX_CONSECUTIVE_FAILED_READS = 5
+
 
 class V4LCamera(BaseCamera):
     """Camera that reads from a Video4Linux device (e.g. /dev/video0)."""
@@ -55,10 +58,15 @@ class V4LCamera(BaseCamera):
         return (self.height, self.width, 3)
 
     def _capture_loop(self):
+        n_failed_reads = 0
         while not self._stop_event.is_set():
             ret, frame = self.cap.read()
             if not ret:
+                n_failed_reads += 1
+                if n_failed_reads >= MAX_CONSECUTIVE_FAILED_READS:
+                    raise CameraException(f"{n_failed_reads} consecutive failed reads from {self.device_path}")
                 continue
+            n_failed_reads = 0
 
             if self._needs_resize:
                 frame = cv2.resize(frame, (self.width, self.height))
@@ -78,6 +86,8 @@ class V4LCamera(BaseCamera):
             time.sleep(1 / self.frame_rate)
 
     def get_frame(self) -> np.ndarray:
+        if not self._thread.is_alive():
+            raise CameraException(f"Capture thread for {self.device_path} died")
         with self._frame_lock:
             if self._current_frame is not None:
                 return self._current_frame.copy()
