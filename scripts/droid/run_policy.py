@@ -5,7 +5,7 @@ from polymetis import RobotInterface, GripperInterface
 import torch
 
 from robo_rollout.robot import BaseRobot
-from robo_rollout.rollout import check_config, run
+from robo_rollout.rollout import TimingBudget, check_config, run
 
 
 MAX_GRIP_WIDTH = 0.085
@@ -88,7 +88,7 @@ def main(cfg: DictConfig):
     # the robot must be reset between trials
     assert (cfg.num_trials is not None and cfg.num_trials <= 1) or cfg.autohome.enabled, \
         "autohome.enabled must be true when running more than one trial"
-    run(cfg, DroidRobot(cfg))
+    run(cfg, DroidRobot(cfg), TimingBudget(obs=0.01, act=0.01))
 
 
 if __name__ == "__main__":

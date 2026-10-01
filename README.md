@@ -47,6 +47,6 @@ def main(cfg):
     run(cfg, MyRobot(cfg))
 ```
 
-`run()` also accepts an optional `TimingBudget`, which sets how long each part of a control step should take; overruns are reported per part.
+`run()` also accepts an optional `TimingBudget`, which sets how long each part of a control step should take. If given, loop overruns are broken down by which parts exceeded their budget; otherwise only the overall overrun is reported.
 
 See [`scripts/droid/run_policy.py`](scripts/droid/run_policy.py) for a complete example.

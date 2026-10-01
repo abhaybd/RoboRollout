@@ -37,9 +37,9 @@ class TimingBudget:
     Time budget in seconds for each part of a control step, used to report which parts caused a loop overrun.
     Budgets left as None evenly split the time remaining in policy_dt after the specified budgets.
     """
-    obs: Optional[float] = 0.01
+    obs: Optional[float] = None
     infer: Optional[float] = None
-    act: Optional[float] = 0.01
+    act: Optional[float] = None
 
     def resolve(self, policy_dt: float) -> "TimingBudget":
         """Get a copy with every budget filled in."""
@@ -119,9 +119,9 @@ class Rollout:
 
 
 class RolloutRunner:
-    def __init__(self, cfg: DictConfig, robot: BaseRobot, timing_budget: TimingBudget):
+    def __init__(self, cfg: DictConfig, robot: BaseRobot, timing_budget: Optional[TimingBudget]):
         self.cfg = cfg
-        self.timing_budget = timing_budget.resolve(cfg.policy_dt)
+        self.timing_budget = timing_budget.resolve(cfg.policy_dt) if timing_budget is not None else None
         self.output_dir = Path(hydra.core.hydra_config.HydraConfig.get().runtime.output_dir)
         self._episode_idx = 0
         self.policy_client = None
@@ -206,16 +206,17 @@ class RolloutRunner:
                 time.sleep(sleep_until - curr_time)
             else:
                 print(f"WARN: Loop overrun by {curr_time - sleep_until:.3f}s")
-                print("Budget violations:")
-                if elapsed_obs.value > self.timing_budget.obs:
-                    print(f"  Observation: {elapsed_obs.value:.3f}s")
-                    for k, v in obs_timing.items():
-                        name = k.split("_", 1)[-1].title()
-                        print(f"    {name}: {v:.3f}s")
-                if elapsed_infer.value > self.timing_budget.infer:
-                    print(f"  Inference: {elapsed_infer.value:.3f}s")
-                if elapsed_act.value > self.timing_budget.act:
-                    print(f"  Action: {elapsed_act.value:.3f}s")
+                if self.timing_budget is not None:
+                    print("Budget violations:")
+                    if elapsed_obs.value > self.timing_budget.obs:
+                        print(f"  Observation: {elapsed_obs.value:.3f}s")
+                        for k, v in obs_timing.items():
+                            name = k.split("_", 1)[-1].title()
+                            print(f"    {name}: {v:.3f}s")
+                    if elapsed_infer.value > self.timing_budget.infer:
+                        print(f"  Inference: {elapsed_infer.value:.3f}s")
+                    if elapsed_act.value > self.timing_budget.act:
+                        print(f"  Action: {elapsed_act.value:.3f}s")
 
                 while sleep_until < curr_time:
                     sleep_until += cfg.policy_dt
@@ -320,7 +321,7 @@ class RolloutRunner:
 def run(
     cfg: DictConfig,
     robot: BaseRobot,
-    timing_budget: TimingBudget = TimingBudget(),
+    timing_budget: Optional[TimingBudget] = None,
 ):
     """
     Run cfg.num_trials policy rollouts, or until the user exits with ctrl+c if it's null.
@@ -329,7 +330,8 @@ def run(
     Args:
         cfg: The full config.
         robot: The robot to control. run() takes ownership of it, and closes it on exit.
-        timing_budget: Per-step time budgets used to report loop overruns.
+        timing_budget: Per-step time budgets used to report which parts of a step caused a loop overrun.
+            If None, only the overall overrun is reported.
     """
     logging.basicConfig(level=logging.INFO)
     np.set_printoptions(linewidth=150)
