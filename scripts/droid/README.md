@@ -29,10 +29,10 @@ pip install git+https://github.com/abhaybd/RoboRollout.git#egg=robo_rollout[zed]
 
 ### Hardware Setup
 
-Modify the [eval config](/robot_eval/config/droid.yaml) to match your hardware setup. In particular, edit:
+Modify the [eval config](config.yaml) to match your hardware setup. In particular, edit:
  * `robot.robot_host` to be the IP of the NUC
- * `robot.cameras.wrist_camera.id` to be the serial number of your wrist camera (ZED Mini)
- * `robot.cameras.exo_camera_1.id` to be the serial number of your exo camera (ZED 2/2i)
+ * `robot.cameras` to match your camera configuration (including camera ID!)
+ * `policy_cameras` to select which cameras to include in policy observations, where the key is the name in the observation and the value is the camera name in `robot.cameras`
 
 If you wish, you can also enable W&B support (upload rollout videos by filling out the `wandb` block of the config and setting `wandb.enabled` to `true`).
 
@@ -57,7 +57,7 @@ If you wish, you can also enable W&B support (upload rollout videos by filling o
     ```
 3. Start up your policy server in terminal 3.
 4. Activate the environment and control the robot.
-    When running the script, the robot will first go to a home position, and then prompt the user to press enter to begin the episode.
+    When running the script, the robot will first go to a home position, and then prompt for a task (leave empty to reuse the previous one) to begin the episode. Press ctrl+c to end an episode early, and again at the task prompt to exit.
     ```bash
     # In terminal 4
     conda activate roborollout_droid

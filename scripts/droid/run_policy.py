@@ -234,7 +234,7 @@ class DroidRolloutRunner:
                 cmd_jp = torch.tensor(cmd_jp_np)
                 # transform gripper from mlspaces convention to droid
                 cmd_grip_width = (
-                    1.0 - action_dict["gripper"].item() / 255.0
+                    1.0 - np.asarray(action_dict["gripper"]).item() / 255.0
                 ) * MAX_GRIP_WIDTH
 
                 self.robot.update_desired_joint_positions(cmd_jp)
@@ -294,24 +294,23 @@ class DroidRolloutRunner:
         try:
             joint_impedance = DroidJointImpedance(self.robot)
             rollout = DroidRollout(self.cfg, episode_dir, self.cameras)
-            start = time.time()
             try:
                 with multi_closing(rollout, joint_impedance):
-                    try:
-                        self._rollout_episode(rollout)
-                    except Exception:
-                        traceback.print_exc()
+                    with measure_elapsed() as elapsed_episode:
+                        try:
+                            self._rollout_episode(rollout)
+                        except Exception:
+                            traceback.print_exc()
             except Exception:
                 # Report closing failures without crashing
                 traceback.print_exc()
 
             success = prompt_success()
 
-            episode_length = time.time() - start
             n_steps = rollout.n_steps
 
             info = {
-                "episode_length": episode_length,
+                "episode_length": elapsed_episode.value,
                 "episode_length_nominal": n_steps * cfg.policy_dt,
                 "episode_length_steps": n_steps,
                 "success": success,
@@ -328,24 +327,30 @@ class DroidRolloutRunner:
             np.savez_compressed(obs_path, **observations_dol)
             np.savez_compressed(act_path, **actions_dol)
 
-            if wandb_run is not None:
-                video_dict = {}
-                for cam_name in self.cameras:
-                    video_dict[f"video/{cam_name}"] = wandb.Video(
-                        episode_dir / f"{cam_name}.mp4",
-                        caption=cam_name,
-                        format="mp4",
-                    )
-                    video_dict[f"video/{cam_name}_rt"] = wandb.Video(
-                        episode_dir / f"{cam_name}_rt.mp4",
-                        caption=cam_name,
-                        format="mp4",
-                    )
+            video_paths = {}
+            missing_videos = []
+            for cam_name in self.cameras:
+                for video_name in (cam_name, f"{cam_name}_rt"):
+                    video_path = episode_dir / f"{video_name}.mp4"
+                    # writers only create the file on the first frame, so it may not exist
+                    if video_path.exists():
+                        video_paths[video_name] = video_path
+                    else:
+                        missing_videos.append(str(video_path))
 
+            if wandb_run is not None:
+                video_dict = {
+                    f"video/{video_name}": wandb.Video(video_path, caption=video_name, format="mp4")
+                    for video_name, video_path in video_paths.items()
+                }
                 wandb_run.summary.update({**info, **video_dict})
 
                 wandb_run.save(obs_path, base_path=obs_path.parent)
                 wandb_run.save(act_path, base_path=act_path.parent)
+
+            # raise only after saving and uploading everything else, so the episode isn't lost
+            if missing_videos:
+                raise FileNotFoundError(f"Videos missing: {missing_videos}")
         finally:
             if wandb_run is not None:
                 wandb_run.finish()
