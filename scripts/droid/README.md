@@ -29,9 +29,9 @@ pip install git+https://github.com/abhaybd/RoboRollout.git#egg=robo_rollout[zed]
 
 ### Hardware Setup
 
-Modify the [eval config](config.yaml) to match your hardware setup. In particular, edit:
+Modify the defaults in the [eval config](config.py) to match your hardware setup, or override them on the command line (e.g. `robot.robot_host=<ip>`). In particular, edit:
  * `robot.robot_host` to be the IP of the NUC
- * `robot.cameras` to match your camera configuration (including camera ID!)
+ * `robot.cameras` to match your camera configuration (including camera ID!). Each camera type has its own config class in [`robo_rollout/cameras/config.py`](/robo_rollout/cameras/config.py).
  * `policy_cameras` to select which cameras to include in policy observations, where the key is the name in the observation and the value is the camera name in `robot.cameras`
 
 If you wish, you can also enable W&B support (upload rollout videos by filling out the `wandb` block of the config and setting `wandb.enabled` to `true`).

@@ -7,6 +7,7 @@ import pyzed.sl as sl
 import numpy as np
 
 from robo_rollout.cameras.abstract import BaseCamera, CameraException
+from robo_rollout.cameras.config import ZedCameraConfig
 from robo_rollout.utils.misc import multi_closing, suppress_decorator
 
 
@@ -61,15 +62,9 @@ def _capture_task(
 
 
 class ZedCamera(BaseCamera):
-    def __init__(
-        self,
-        camera_id,
-        width: int,
-        height: int,
-        frame_rate: int,
-        side: str = "left",
-        depth: bool = False,
-    ):
+    def __init__(self, cfg: ZedCameraConfig):
+        assert cfg.type == "zed", f"Expected camera type 'zed', got '{cfg.type}'"
+        camera_id, width, height = cfg.id, cfg.width, cfg.height
         init_event = Event()
         self._stop_event = Event()
         self._frame_lock = Lock()
@@ -82,9 +77,9 @@ class ZedCamera(BaseCamera):
                 camera_id,
                 width,
                 height,
-                frame_rate,
-                side,
-                depth,
+                cfg.frame_rate,
+                cfg.side,
+                cfg.depth,
                 init_event,
                 self._stop_event,
                 self._frame_lock,
@@ -134,4 +129,6 @@ class ZedCamera(BaseCamera):
                 pass
 
     def __del__(self):
-        self.close()
+        # skip if __init__ failed before there was anything to close
+        if hasattr(self, "_capture_proc"):
+            self.close()

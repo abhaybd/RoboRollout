@@ -37,12 +37,14 @@ Camera-specific packages/libraries are included as optional dependencies, or ext
 All robot-agnostic logic (policy client, cameras, control loop timing, video recording, saving, and W&B logging) lives in [`robo_rollout/rollout.py`](robo_rollout/rollout.py). To add a robot, create a `scripts/<robot>/` folder containing:
 
 1. A subclass of [`BaseRobot`](robo_rollout/robot.py) implementing `get_state()` and `apply_action()`, and optionally `reset()`, `start_control()`, `stop_control()` and `close()`. Its constructor can take whatever arguments you like.
-2. A hydra config. Copy [`scripts/droid/config.yaml`](scripts/droid/config.yaml) and edit the `robot` block; the other keys are used by the shared rollout code.
-3. An entry point that checks the config and passes your robot to `run()`:
+2. A [structured config](https://hydra.cc/docs/tutorials/structured_config/intro/): a dataclass subclassing [`RolloutConfig`](robo_rollout/config.py), which holds the settings shared by all robots. Add robot-specific settings as new fields, and to add robot-specific settings under `robot`, also subclass `RobotConfig`. Override inherited fields to set defaults for your setup. See [`scripts/droid/config.py`](scripts/droid/config.py).
+3. An entry point that registers the config, checks it, and passes your robot to `run()`:
 
 ```python
-@hydra.main(version_base=None, config_path=".", config_name="config")
-def main(cfg):
+ConfigStore.instance().store(name="config", node=MyConfig)
+
+@hydra.main(version_base=None, config_name="config")
+def main(cfg: MyConfig):
     check_config(cfg)  # fail fast, before connecting to the robot
     run(cfg, MyRobot(cfg))
 ```

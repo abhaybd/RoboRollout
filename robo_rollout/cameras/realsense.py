@@ -7,20 +7,22 @@ import pyrealsense2 as rs
 from google.protobuf.timestamp_pb2 import Timestamp
 
 from robo_rollout.cameras.abstract import BaseCamera
+from robo_rollout.cameras.config import RealSenseCameraConfig
 
 class RealSenseCamera(BaseCamera):
-    def __init__(self, camera_id, width=1280, height=720, frame_rate=30, buffer_size=10):
-        self.width = width
-        self.height = height
-        self.frame_rate = frame_rate
+    def __init__(self, cfg: RealSenseCameraConfig):
+        assert cfg.type == "realsense", f"Expected camera type 'realsense', got '{cfg.type}'"
+        self.width = cfg.width
+        self.height = cfg.height
+        self.frame_rate = cfg.frame_rate
 
         self.pipeline = rs.pipeline()
         self.config = rs.config()
-        self.config.enable_device(camera_id)
-        self.camera_id = camera_id
+        self.config.enable_device(cfg.id)
+        self.camera_id = cfg.id
         self.initialize_cameras()
 
-        self.max_frames = buffer_size
+        self.max_frames = cfg.buffer_size
         self.bgr_stack = []
         self.depth_stack = []
         self.bgr_stack_lock = threading.Lock()

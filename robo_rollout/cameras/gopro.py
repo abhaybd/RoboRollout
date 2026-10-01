@@ -7,16 +7,18 @@ from google.protobuf.timestamp_pb2 import Timestamp
 import cv2
 
 from robo_rollout.cameras.abstract import BaseCamera
+from robo_rollout.cameras.config import GoProCameraConfig
 
 
 class GoProCamera(BaseCamera):
-    def __init__(self, elgato_device_id, width=640, height=480, frame_rate=30, buffer_size=7):
-        assert width / height == 4 / 3, "Aspect ratio must be 4:3"
+    def __init__(self, cfg: GoProCameraConfig):
+        assert cfg.type == "gopro", f"Expected camera type 'gopro', got '{cfg.type}'"
+        assert cfg.width / cfg.height == 4 / 3, "Aspect ratio must be 4:3"
 
-        self.width = width
-        self.height = height
-        self.frame_rate = frame_rate
-        self.device_id = elgato_device_id
+        self.width = cfg.width
+        self.height = cfg.height
+        self.frame_rate = cfg.frame_rate
+        self.device_id = elgato_device_id = cfg.id
 
         # Assert that the Elgato device ID exists in /dev/v4l/by-id/ with index0
         base_video_path = "/dev/v4l/by-id/"
@@ -38,7 +40,7 @@ class GoProCamera(BaseCamera):
             raise RuntimeError("Failed to open video capture")
 
         self.timestamp = Timestamp()
-        self.max_frames = buffer_size
+        self.max_frames = cfg.buffer_size
         self.frame_stack = []
         self.stack_lock = threading.Lock()
         self.stop_event = threading.Event()
@@ -107,4 +109,6 @@ class GoProCamera(BaseCamera):
 
 
     def __del__(self):
-        self.close()
+        # skip if __init__ failed before there was anything to close
+        if hasattr(self, "thread"):
+            self.close()

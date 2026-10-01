@@ -1,12 +1,12 @@
 import logging
 import time
 import threading
-from typing import Literal, Optional, Union
 
 import cv2
 import numpy as np
 
 from robo_rollout.cameras.abstract import BaseCamera, CameraException
+from robo_rollout.cameras.config import V4LCameraConfig
 
 
 log = logging.getLogger(__name__)
@@ -15,29 +15,14 @@ log = logging.getLogger(__name__)
 class V4LCamera(BaseCamera):
     """Camera that reads from a Video4Linux device (e.g. /dev/video0)."""
 
-    def __init__(
-        self,
-        device: Union[int, str],
-        width: int = 1280,
-        height: int = 720,
-        frame_rate: int = 30,
-        stereo_side: Optional[Literal["left", "right"]] = None,
-    ):
-        """
-        Args:
-            device: Either a device number N (opened as /dev/videoN) or a full
-                device path such as "/dev/video0".
-            width: Desired capture width.
-            height: Desired capture height.
-            frame_rate: Desired capture frame rate.
-            stereo_side: If the camera is a concatenated stereo camera, the side to capture.
-                Must be "left" or "right". If not provided, the full frame will be captured.
-        """
+    def __init__(self, cfg: V4LCameraConfig):
+        assert cfg.type == "v4l", f"Expected camera type 'v4l', got '{cfg.type}'"
+        device, width, height, frame_rate = cfg.id, cfg.width, cfg.height, cfg.frame_rate
         self.device_path = device if isinstance(device, str) else f"/dev/video{device}"
         self.width = width
         self.height = height
         self.frame_rate = frame_rate
-        self.stereo_side = stereo_side
+        self.stereo_side = cfg.stereo_side
 
         self.cap = cv2.VideoCapture(self.device_path, cv2.CAP_V4L2)
         if not self.cap.isOpened():
@@ -105,5 +90,6 @@ class V4LCamera(BaseCamera):
             self.cap.release()
 
     def __del__(self):
-        if not self._stop_event.is_set():
+        # skip if __init__ failed before there was anything to close
+        if hasattr(self, "_thread") and not self._stop_event.is_set():
             self.close()

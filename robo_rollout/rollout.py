@@ -10,12 +10,13 @@ import traceback
 
 import hydra
 from ffmpegcv import VideoWriter
-from omegaconf import DictConfig, OmegaConf, open_dict
+from omegaconf import OmegaConf
 import numpy as np
 import wandb
 
 from robo_rollout.cameras.abstract import BaseCamera
 from robo_rollout.cameras.camera import create_camera
+from robo_rollout.config import ResizeMethod, RolloutConfig
 from robo_rollout.policy.policy_client import PolicyClient
 from robo_rollout.robot import BaseRobot
 from robo_rollout.utils.image import resize_with_crop, resize_with_pad, downsample
@@ -23,12 +24,15 @@ from robo_rollout.utils.threading import AsyncMultiVideoWriter, ThreadedPeriodic
 from robo_rollout.utils.misc import lod_to_dol, measure_elapsed, multi_closing, suppress_decorator
 
 
-def check_config(cfg: DictConfig):
-    """Raise if any config values are missing (i.e. set to ???) or invalid."""
+def check_config(cfg: RolloutConfig):
+    """
+    Raise if any config values are missing (i.e. set to ???) or invalid.
+    Types are already checked by hydra, so this only checks values.
+    """
     if missing_keys := OmegaConf.missing_keys(cfg):
         raise ValueError(f"Missing keys: {missing_keys}")
-    assert cfg.num_trials is None or (isinstance(cfg.num_trials, int) and cfg.num_trials >= 0), \
-        f"num_trials must be null or a non-negative int, got {cfg.num_trials}"
+    assert cfg.num_trials is None or cfg.num_trials >= 0, \
+        f"num_trials must be null or non-negative, got {cfg.num_trials}"
 
 
 @dataclass(frozen=True)
@@ -67,7 +71,7 @@ def prompt_success():
         return False
 
 
-def create_writer(cfg, output_dir, cam_name):
+def create_writer(cfg: RolloutConfig, output_dir: Path, cam_name: str):
     return VideoWriter(
         str(output_dir / f"{cam_name}.mp4"),
         fps=round(1.0 / cfg.policy_dt),
@@ -90,7 +94,7 @@ class RobotControl:
 class Rollout:
     """Data recorded during a single episode."""
 
-    def __init__(self, cfg: DictConfig, output_dir: Path, cameras: Dict[str, BaseCamera]):
+    def __init__(self, cfg: RolloutConfig, output_dir: Path, cameras: Dict[str, BaseCamera]):
         self.cfg = cfg
         self.cameras = cameras
         self.observations = []
@@ -119,7 +123,7 @@ class Rollout:
 
 
 class RolloutRunner:
-    def __init__(self, cfg: DictConfig, robot: BaseRobot, timing_budget: Optional[TimingBudget]):
+    def __init__(self, cfg: RolloutConfig, robot: BaseRobot, timing_budget: Optional[TimingBudget]):
         self.cfg = cfg
         self.timing_budget = timing_budget.resolve(cfg.policy_dt) if timing_budget is not None else None
         self.output_dir = Path(hydra.core.hydra_config.HydraConfig.get().runtime.output_dir)
@@ -130,10 +134,10 @@ class RolloutRunner:
         self.robot = robot
 
         self.resize_func = {
-            "center_pad": resize_with_pad,
-            "center_crop": resize_with_crop,
-            "downsample": downsample,
-            "none": lambda x, h, w: x,
+            ResizeMethod.center_pad: resize_with_pad,
+            ResizeMethod.center_crop: resize_with_crop,
+            ResizeMethod.downsample: downsample,
+            ResizeMethod.none: lambda x, h, w: x,
         }[cfg.image_input.method]
 
         print("Opening cameras...")
@@ -224,8 +228,7 @@ class RolloutRunner:
 
     def rollout_episode(self, task: Optional[str]):
         if task:
-            with open_dict(self.cfg):
-                self.cfg.task = task
+            self.cfg.task = task
         cfg = self.cfg
         self._reset_policy()
         episode_dir = self.output_dir / f"episode_{self._episode_idx:04d}"
@@ -233,7 +236,7 @@ class RolloutRunner:
         episode_dir.mkdir(parents=True, exist_ok=True)
 
         if cfg.wandb.enabled:
-            wandb_cfg = OmegaConf.to_container(cfg, resolve=True)
+            wandb_cfg = OmegaConf.to_container(cfg, resolve=True, enum_to_str=True)
             wandb_cfg["policy_metadata"] = self.metadata
             wandb_run = wandb.init(
                 entity=cfg.wandb.entity,
@@ -319,7 +322,7 @@ class RolloutRunner:
 
 
 def run(
-    cfg: DictConfig,
+    cfg: RolloutConfig,
     robot: BaseRobot,
     timing_budget: Optional[TimingBudget] = None,
 ):

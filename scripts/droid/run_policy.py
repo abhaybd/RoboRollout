@@ -1,9 +1,10 @@
 import hydra
-from omegaconf import DictConfig
+from hydra.core.config_store import ConfigStore
 import numpy as np
 from polymetis import RobotInterface, GripperInterface
 import torch
 
+from config import DroidConfig
 from robo_rollout.robot import BaseRobot
 from robo_rollout.rollout import TimingBudget, check_config, run
 
@@ -13,7 +14,7 @@ MAX_MLSPACES_GRIP_WIDTH = 0.824033
 
 
 class DroidRobot(BaseRobot):
-    def __init__(self, cfg: DictConfig):
+    def __init__(self, cfg: DroidConfig):
         self.cfg = cfg
         self.robot = RobotInterface(
             ip_address=cfg.robot.robot_host,
@@ -82,8 +83,11 @@ class DroidRobot(BaseRobot):
         self.stop_control()
 
 
-@hydra.main(version_base=None, config_path=".", config_name="config")
-def main(cfg: DictConfig):
+ConfigStore.instance().store(name="config", node=DroidConfig)
+
+
+@hydra.main(version_base=None, config_name="config")
+def main(cfg: DroidConfig):
     check_config(cfg)
     # the robot must be reset between trials
     assert (cfg.num_trials is not None and cfg.num_trials <= 1) or cfg.autohome.enabled, \
