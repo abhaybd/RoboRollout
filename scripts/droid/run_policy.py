@@ -60,25 +60,6 @@ def prompt_success():
         return False
 
 
-def get_robot_state(robot: RobotInterface, gripper: GripperInterface):
-    jp = robot.get_joint_positions().numpy()
-    ee_pos, ee_quat = [x.numpy() for x in robot.get_ee_pose()]
-    grip_width = gripper.get_state().width
-    # transform gripper to be as expected by molmospaces
-    grip_normalized = np.clip(grip_width / MAX_GRIP_WIDTH, 0.0, 1.0)
-    gripper_input = np.full(2, (1.0 - grip_normalized) * MAX_MLSPACES_GRIP_WIDTH)
-    return {
-        "qpos": {
-            "arm": jp,
-            "gripper": gripper_input,
-        },
-        "ee_pose": {
-            "pos": ee_pos,
-            "quat": ee_quat,
-        }
-    }
-
-
 def create_writer(cfg, output_dir, cam_name):
     return VideoWriter(
         str(output_dir / f"{cam_name}.mp4"),
@@ -177,13 +158,31 @@ class DroidRolloutRunner:
             home_jp = torch.tensor(self.cfg.autohome.home_jointpos)
             self.robot.move_to_joint_positions(home_jp, self.cfg.autohome.duration)
 
+    def _get_robot_state(self):
+        jp = self.robot.get_joint_positions().numpy()
+        ee_pos, ee_quat = [x.numpy() for x in self.robot.get_ee_pose()]
+        grip_width = self.gripper.get_state().width
+        # transform gripper to be as expected by molmospaces
+        grip_normalized = np.clip(grip_width / MAX_GRIP_WIDTH, 0.0, 1.0)
+        gripper_input = np.full(2, (1.0 - grip_normalized) * MAX_MLSPACES_GRIP_WIDTH)
+        return {
+            "qpos": {
+                "arm": jp,
+                "gripper": gripper_input,
+            },
+            "ee_pose": {
+                "pos": ee_pos,
+                "quat": ee_quat,
+            }
+        }
+
     def get_obs(self, observations: List, video_writer: AsyncMultiVideoWriter):
         obs = {
             "task": self.cfg.task,
         }
 
         with measure_elapsed() as elapsed_robot:
-            robot_state = get_robot_state(self.robot, self.gripper)
+            robot_state = self._get_robot_state()
             observations.append(robot_state)
             obs.update(robot_state)
 
@@ -193,16 +192,6 @@ class DroidRolloutRunner:
                 frame = camera.get_frame()
                 video_writer.write(cam_name, frame)
                 frame_resized = self.resize_func(frame, self.cfg.image_input.height, self.cfg.image_input.width)
-
-                frame_std = np.std(np.mean(frame, axis=-1)).item()
-                # Sometimes cameras fail silently and return single-color frames
-                if frame_std < 1.0:
-                    if self.cfg.wandb.enabled and "camera_failure" not in wandb.run.tags:
-                        wandb.run.tags = wandb.run.tags + ("camera_failure",)
-                    raise ValueError(
-                        "Camera failure detected, constant color frames"
-                    )
-
                 curr_camera_frames[cam_name] = frame_resized
 
             for obs_cam_name, cam_name in self.cfg.policy_cameras.items():
@@ -384,6 +373,7 @@ def main(cfg: DictConfig):
                 rollout_runner.reset_robot()
                 task = input(f"Enter task or leave empty to use default \"{cfg.task}\" (ctrl+c to exit): ").strip()
                 rollout_runner.rollout_episode(task)
+
 
 if __name__ == "__main__":
     main()
