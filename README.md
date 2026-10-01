@@ -43,7 +43,7 @@ All robot-agnostic logic (policy client, cameras, control loop timing, video rec
 ```python
 @hydra.main(version_base=None, config_path=".", config_name="config")
 def main(cfg):
-    check_missing_keys(cfg)  # fail fast, before connecting to the robot
+    check_config(cfg)  # fail fast, before connecting to the robot
     run(cfg, MyRobot(cfg))
 ```
 

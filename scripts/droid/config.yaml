@@ -38,6 +38,7 @@ policy_cameras:
   exo_camera_1: ???
   wrist_camera: wrist_camera
 nominal_timeout: 45.0
+num_trials: null  # null to run until ctrl+c
 action_scale: 1.0
 task: "???"
 

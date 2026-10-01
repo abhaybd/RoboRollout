@@ -5,7 +5,7 @@ from polymetis import RobotInterface, GripperInterface
 import torch
 
 from robo_rollout.robot import BaseRobot
-from robo_rollout.rollout import check_missing_keys, run
+from robo_rollout.rollout import check_config, run
 
 
 MAX_GRIP_WIDTH = 0.085
@@ -84,7 +84,10 @@ class DroidRobot(BaseRobot):
 
 @hydra.main(version_base=None, config_path=".", config_name="config")
 def main(cfg: DictConfig):
-    check_missing_keys(cfg)
+    check_config(cfg)
+    # the robot must be reset between trials
+    assert (cfg.num_trials is not None and cfg.num_trials <= 1) or cfg.autohome.enabled, \
+        "autohome.enabled must be true when running more than one trial"
     run(cfg, DroidRobot(cfg))
 
 

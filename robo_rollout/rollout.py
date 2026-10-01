@@ -1,3 +1,4 @@
+import itertools
 import json
 from pathlib import Path
 import time
@@ -22,10 +23,12 @@ from robo_rollout.utils.threading import AsyncMultiVideoWriter, ThreadedPeriodic
 from robo_rollout.utils.misc import lod_to_dol, measure_elapsed, multi_closing, suppress_decorator
 
 
-def check_missing_keys(cfg: DictConfig):
-    """Raise if any config values are missing (i.e. set to ???)."""
+def check_config(cfg: DictConfig):
+    """Raise if any config values are missing (i.e. set to ???) or invalid."""
     if missing_keys := OmegaConf.missing_keys(cfg):
         raise ValueError(f"Missing keys: {missing_keys}")
+    assert cfg.num_trials is None or (isinstance(cfg.num_trials, int) and cfg.num_trials >= 0), \
+        f"num_trials must be null or a non-negative int, got {cfg.num_trials}"
 
 
 @dataclass(frozen=True)
@@ -320,7 +323,7 @@ def run(
     timing_budget: TimingBudget = TimingBudget(),
 ):
     """
-    Run policy rollouts until the user exits with ctrl+c.
+    Run cfg.num_trials policy rollouts, or until the user exits with ctrl+c if it's null.
     Call this from a robot's hydra entry point.
 
     Args:
@@ -333,14 +336,17 @@ def run(
 
     # close the robot even if the runner fails to initialize
     with closing(robot):
-        check_missing_keys(cfg)
+        check_config(cfg)
+        num_trials: Optional[int] = cfg.num_trials
 
         print("Evaluation Configuration:")
         print(OmegaConf.to_yaml(cfg))
 
         with closing(RolloutRunner(cfg, robot, timing_budget)) as rollout_runner:
             with suppress(KeyboardInterrupt):
-                while True:
+                for trial_idx in (itertools.count() if num_trials is None else range(num_trials)):
+                    if num_trials is not None:
+                        print(f"Trial {trial_idx + 1}/{num_trials}")
                     robot.reset()
                     task = input(f"Enter task or leave empty to use default \"{cfg.task}\" (ctrl+c to exit): ").strip()
                     rollout_runner.rollout_episode(task)
