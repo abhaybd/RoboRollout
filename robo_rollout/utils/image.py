@@ -84,8 +84,8 @@ def _resize_with_pad_pil(image: Image.Image, height: int, width: int, method: in
     return zero_image
 
 def _resize_with_crop_pil(image: Image.Image, height: int, width: int, method: int) -> Image.Image:
-    """Replicates tf.image.resize_with_pad for one image using PIL. Resizes an image to a target height and
-    width without distortion by padding with zeros.
+    """Resizes an image to a target height and width without distortion by scaling it to cover the target
+    and center cropping.
 
     Unlike the jax version, note that PIL uses [width, height, channel] ordering instead of [batch, h, w, c].
     """
@@ -93,9 +93,10 @@ def _resize_with_crop_pil(image: Image.Image, height: int, width: int, method: i
     if cur_width == width and cur_height == height:
         return image  # No need to resize if the image is already the correct size.
 
-    ratio = max(cur_width / width, cur_height / height)
-    resized_height = int(cur_height / ratio)
-    resized_width = int(cur_width / ratio)
+    # scale so the image covers the target, then crop the excess
+    ratio = min(cur_width / width, cur_height / height)
+    resized_height = max(height, round(cur_height / ratio))
+    resized_width = max(width, round(cur_width / ratio))
     resized_image = image.resize((resized_width, resized_height), resample=method)
 
     crop_left = max(0, (resized_width - width) // 2)
