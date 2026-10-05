@@ -9,15 +9,16 @@ from robo_rollout.config import ImageInputConfig, ResizeMethod, RobotConfig, Rol
 
 @dataclass
 class GripperConfig:
-    speed: float = 0.085
-    force: float = 10.0
+    speed: float = 0.05
+    force: float = 0.1
 
 
 @dataclass
 class AutohomeConfig:
     enabled: bool = True
     duration: float = 5.0
-    home_jointpos: List[float] = field(default_factory=lambda: [0.0, -0.7, 0.0, -2.35619, 0.0, 1.57079, 0.0])
+    # DROID default home position
+    home_jointpos: List[float] = field(default_factory=lambda: [0.0, -0.628319, 0.0, -2.513274, 0.0, 1.884956, 0.0])
 
 
 @dataclass
@@ -55,4 +56,5 @@ class DroidConfig(RolloutConfig):
     ))
 
     action_scale: float = 1.0
+    max_joint_delta: float = 0.2
     autohome: AutohomeConfig = field(default_factory=AutohomeConfig)

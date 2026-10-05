@@ -9,11 +9,21 @@ from robo_rollout.robot import BaseRobot
 from robo_rollout.rollout import TimingBudget, check_config, run
 
 
-MAX_GRIP_WIDTH = 0.085
-MAX_MLSPACES_GRIP_WIDTH = 0.824033
-
-
 class DroidRobot(BaseRobot):
+    """
+    Franka robot following the DROID conventions.
+
+    Robot state:
+        qpos/arm: (7,) joint angles in radians
+        qpos/gripper: (1,) in [0, 1], where 0 is open and 1 is closed
+        ee_pose/pos: (3,) end-effector position
+        ee_pose/quat: (4,) end-effector orientation as an xyzw quaternion
+
+    Policy actions (DROID's joint_position action space, with gripper position):
+        arm: (7,) absolute joint position targets in radians, limited to max_joint_delta of motion per step
+        gripper: scalar or (1,) in [0, 1], where 0 is open and 1 is closed
+    """
+
     def __init__(self, cfg: DroidConfig):
         self.cfg = cfg
         self.robot = RobotInterface(
@@ -21,11 +31,12 @@ class DroidRobot(BaseRobot):
             enforce_version=False,
         )
         self.gripper = GripperInterface(ip_address=cfg.robot.robot_host)
+        self.max_gripper_width = self.gripper.metadata.max_width
         self._last_gripper_cmd = self.gripper.get_state().width
 
     def reset(self):
         print("Opening gripper...")
-        self.gripper.goto(MAX_GRIP_WIDTH, self.cfg.robot.gripper.speed, self.cfg.robot.gripper.force)
+        self.gripper.goto(self.max_gripper_width, self.cfg.robot.gripper.speed, self.cfg.robot.gripper.force)
 
         if self.cfg.autohome.enabled:
             print("Going home...")
@@ -44,13 +55,10 @@ class DroidRobot(BaseRobot):
         jp = self.robot.get_joint_positions().numpy()
         ee_pos, ee_quat = [x.numpy() for x in self.robot.get_ee_pose()]
         grip_width = self.gripper.get_state().width
-        # transform gripper to be as expected by molmospaces
-        grip_normalized = np.clip(grip_width / MAX_GRIP_WIDTH, 0.0, 1.0)
-        gripper_input = np.full(2, (1.0 - grip_normalized) * MAX_MLSPACES_GRIP_WIDTH)
         return {
             "qpos": {
                 "arm": jp,
-                "gripper": gripper_input,
+                "gripper": np.array([1.0 - grip_width / self.max_gripper_width]),
             },
             "ee_pose": {
                 "pos": ee_pos,
@@ -60,15 +68,18 @@ class DroidRobot(BaseRobot):
 
     def apply_action(self, obs, action):
         curr_jp = obs["qpos"]["arm"]
-        cmd_jp = curr_jp + (action["arm"] - curr_jp) * self.cfg.action_scale
+        joint_delta = (np.asarray(action["arm"]) - curr_jp) * self.cfg.action_scale
+        # limit the joint delta by rescaling it
+        max_delta = np.abs(joint_delta).max()
+        if max_delta > self.cfg.max_joint_delta:
+            joint_delta = joint_delta * (self.cfg.max_joint_delta / max_delta)
+        cmd_jp = curr_jp + joint_delta
         action["arm"] = cmd_jp
-        # convert abs joints to joint vel based on droid conversion
-        action["arm_vel"] = (cmd_jp - curr_jp) / 0.2
+        # according to DROID, "velocity" is just normalized joint delta
+        action["arm_vel"] = joint_delta / self.cfg.max_joint_delta
 
-        # transform gripper from mlspaces convention to droid
-        cmd_grip_width = (
-            1.0 - np.asarray(action["gripper"]).item() / 255.0
-        ) * MAX_GRIP_WIDTH
+        cmd_grip_pos = float(np.clip(np.asarray(action["gripper"]).item(), 0.0, 1.0))
+        cmd_grip_width = (1.0 - cmd_grip_pos) * self.max_gripper_width
 
         self.robot.update_desired_joint_positions(torch.tensor(cmd_jp))
 
