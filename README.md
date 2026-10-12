@@ -11,6 +11,7 @@ The following cameras are supported:
 
 The following robots are supported:
 - Franka / DROID (via Polymetis)
+- Bimanual i2rt YAM
 
 ## Installation
 

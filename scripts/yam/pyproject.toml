@@ -1,0 +1,20 @@
+[project]
+name = "robo_rollout_yam"
+version = "0.1.0"
+description = "RoboRollout entrypoint for the bimanual i2rt YAM"
+requires-python = ">=3.10"  # required by i2rt
+dependencies = [
+    "i2rt",
+    "robo_rollout[realsense]",
+]
+
+[tool.uv]
+# only scripts, nothing to build or install
+package = false
+# i2rt depends on ruckig 0.15.3, which only publishes an sdist that fails to build with scikit-build-core>=0.10.
+# i2rt pins this in its own pyproject.toml, but build constraints don't carry over to dependents.
+build-constraint-dependencies = ["scikit-build-core<0.10"]
+
+[tool.uv.sources]
+i2rt = { git = "https://github.com/i2rt-robotics/i2rt.git" }
+robo_rollout = { path = "../..", editable = true }
