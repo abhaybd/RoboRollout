@@ -20,8 +20,10 @@ conda install -c pytorch -c fair-robotics -c aihabitat -c conda-forge polymetis
 cd /usr/local/zed
 python get_python_api.py
 
-# Install dependencies
-pip install git+https://github.com/abhaybd/RoboRollout.git#egg=robo_rollout[zed]
+# Install RoboRollout
+git clone https://github.com/abhaybd/RoboRollout.git
+cd RoboRollout
+pip install -e .[zed]
 ```
 
 
