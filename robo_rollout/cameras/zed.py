@@ -4,8 +4,15 @@ from multiprocessing.shared_memory import SharedMemory
 import signal
 import time
 
-import pyzed.sl as sl
 import numpy as np
+
+try:
+    import pyzed.sl as sl
+except ImportError as e:
+    raise ImportError(
+        "pyzed not found! Install the ZED SDK (https://www.stereolabs.com/developers/release), "
+        "then install its python bindings into this environment with `python /usr/local/zed/get_python_api.py`."
+    ) from e
 
 from robo_rollout.cameras.abstract import BaseCamera, CameraException
 from robo_rollout.cameras.config import ZedCameraConfig

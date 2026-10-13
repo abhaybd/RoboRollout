@@ -22,9 +22,6 @@ realsense = [
     "protobuf",
     "pyrealsense2",
 ]
-zed = [
-    "pyzed",
-]
 test = [
     "pytest",
 ]

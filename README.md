@@ -31,7 +31,8 @@ Camera-specific packages/libraries are included as optional dependencies, or ext
 
 - `gopro`
 - `realsense`
-- `zed`
+
+The ZED SDK's python bindings (`pyzed`) aren't on PyPI, so to use ZED cameras, install the [ZED SDK](https://www.stereolabs.com/developers/release) and then its python bindings into your environment by running `python /usr/local/zed/get_python_api.py`.
 
 ## Adding a new robot
 
