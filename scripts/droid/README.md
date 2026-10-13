@@ -8,7 +8,20 @@ If you already have the [DROID](https://droid-dataset.github.io) framework insta
 
 ### On your Inference PC
 
-First, install the [ZED SDK](https://www.stereolabs.com/developers/release), matching your CUDA version. Then:
+First, install the [ZED SDK](https://www.stereolabs.com/developers/release), matching your CUDA version. Then, install [pixi](https://pixi.sh) if needed, and:
+
+```bash
+# Install dependencies (polymetis and RoboRollout)
+git clone https://github.com/abhaybd/RoboRollout.git
+cd RoboRollout/scripts/droid
+pixi install
+
+# Install ZED SDK python bindings
+pixi run install-zed
+```
+
+<details>
+<summary>Alternatively, install with conda</summary>
 
 ```bash
 # Create fresh conda env for polymetis
@@ -23,8 +36,11 @@ python get_python_api.py
 # Install RoboRollout
 git clone https://github.com/abhaybd/RoboRollout.git
 cd RoboRollout
-pip install -e .[zed]
+pip install -e .
 ```
+
+If `import torch` fails with `undefined symbol: iJIT_NotifyEvent`, run `conda install "mkl<2024.1"`.
+</details>
 
 
 ## Policy Evaluation
@@ -58,12 +74,14 @@ If you wish, you can also enable W&B support (upload rollout videos by filling o
     launch_gripper.py gripper=robotiq_2f
     ```
 3. Start up your policy server in terminal 3.
-4. Activate the environment and control the robot.
+4. Control the robot.
     When running the script, the robot will first go to a home position, and then prompt for a task (leave empty to reuse the previous one) to begin the episode. Press ctrl+c to end an episode early, and again at the task prompt to exit.
     ```bash
     # In terminal 4
-    conda activate roborollout_droid
-    python scripts/droid/run_policy.py task="put the red mug in the black bowl"
+    cd scripts/droid
+    pixi run python run_policy.py task="put the red mug in the black bowl"
     ```
 
-    NOTE: if you get `ffmpeg`/`ImageIO` errors, you may need to run `conda remove --force ffmpeg` and install it system-wide with `sudo apt install ffmpeg`.
+    If you installed with conda, instead run `conda activate roborollout_droid` and then `python scripts/droid/run_policy.py task="..."`.
+
+    NOTE: with conda, if you get `ffmpeg`/`ImageIO` errors, you may need to run `conda remove --force ffmpeg` and install it system-wide with `sudo apt install ffmpeg`.
