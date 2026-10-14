@@ -1,6 +1,6 @@
 # RoboRollout
 
-RoboRollout is a lighweight framework for real-robot policy evaluation. It seeks to consolidate all robot-agnostic utilities and sensor code, and provides clean and easily extensible entrypoints for some robots.
+RoboRollout is a lightweight framework for real-robot policy evaluation. It seeks to consolidate all robot-agnostic utilities and sensor code, and provides clean and easily extensible entrypoints for some robots.
 This includes camera code, image/threading utilities, policy server clients, and more.
 
 **Documentation:** https://abhaybd.github.io/RoboRollout/

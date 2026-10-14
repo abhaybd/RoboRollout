@@ -27,6 +27,38 @@ pixi run python run_policy.py task="put the red mug in the black bowl"
 
 Before each episode, the robot opens its gripper and moves to its home position.
 
+## Configuring your setup
+
+Before your first run, point the config at your hardware. Edit the defaults in [`scripts/droid/config.py`](https://github.com/abhaybd/RoboRollout/blob/main/scripts/droid/config.py), so you don't have to pass them every time. You can also override any setting on the command line for a single run (see [Configuration](../usage/configuration.md)).
+
+1. **Robot**: set `robot_host` in `DroidRobotConfig` to the IP of the NUC.
+2. **Cameras**: set the serial number (`id`) of each camera in `robot.cameras`. The ZED SDK's `ZED_Explorer` tool can list the serial numbers of connected cameras.
+
+    ```python
+    @dataclass
+    class DroidRobotConfig(RobotConfig):
+        robot_host: str = "192.168.1.10"
+        gripper: GripperConfig = field(default_factory=GripperConfig)
+        cameras: Dict[str, CameraConfig] = field(default_factory=lambda: {
+            "wrist_camera": ZedCameraConfig(id=12345678),
+            "exo_camera_1": ZedCameraConfig(id=23456789),
+            "exo_camera_2": ZedCameraConfig(id=34567890),
+        })
+    ```
+
+    If your setup has a different set of cameras, add or remove entries to match (see [Cameras](../usage/cameras.md)).
+3. **Policy cameras**: `policy_cameras` sets which cameras the policy sees, and under which observation keys. By default, the policy sees `wrist_camera` and `exo_camera_1`. Change it to match what your policy expects.
+4. **Policy server**: if your policy server isn't running on the same machine on port 8000, set `policy_host` and `policy_port`.
+5. **W&B** (optional): logging is off by default. To log episodes, set `wandb.enabled=true`, `wandb.entity`, and `wandb.project` (see [Running evaluations](../usage/running-evaluations.md#weights-biases)).
+
+To check your config, print it without connecting to anything:
+
+```bash
+pixi run python run_policy.py --cfg job
+```
+
+Settings still shown as `???` have to be set before running, apart from `task`, which you pass when you run.
+
 ## Observations and actions
 
 Your policy server receives the following observation each step (see [Policy servers](../usage/policy-servers.md)):
@@ -59,18 +91,13 @@ The defaults are set in [`scripts/droid/config.py`](https://github.com/abhaybd/R
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `robot.robot_host` | `172.16.0.2` | IP of the NUC |
+| `robot.robot_host` | required | IP of the NUC |
 | `robot.gripper.speed`, `robot.gripper.force` | `0.05`, `0.1` | Gripper speed and force |
-| `robot.cameras` | Three ZED cameras | `wrist_camera`, `exo_camera_1`, and `exo_camera_2`. Set their serial numbers to match your cameras. |
+| `robot.cameras` | Three ZED cameras | `wrist_camera`, `exo_camera_1`, and `exo_camera_2`. Their serial numbers are required. |
 | `action_scale` | `1.0` | Scales each step's joint motion |
 | `max_joint_delta` | `0.2` | Maximum joint motion per step, in radians |
 | `autohome.enabled` | `true` | Move to the home position before each episode. Must be enabled to run more than one trial. |
 | `autohome.home_jointpos` | DROID home position | Joint positions to start each episode from |
 | `autohome.duration` | `5.0` | Seconds to take moving home |
 
-Policies run at about 15 Hz (`policy_dt=0.066`), and episodes time out after 45 seconds of nominal time. Camera images are downsampled to 640x360.
-
-!!! warning "Required settings"
-    `policy_cameras.exo_camera_1` has no default, so choose which exterior camera the policy sees, e.g. `policy_cameras.exo_camera_1=exo_camera_2`.
-
-    W&B logging is enabled by default with the maintainers' entity and project. Set `wandb.entity` and `wandb.project` to your own, or disable it with `wandb.enabled=false`.
+Policies run at about 15 Hz (`policy_dt=0.066`), and episodes time out after 45 seconds of nominal time. The policy sees `wrist_camera` and `exo_camera_1`, downsampled to 640x360.

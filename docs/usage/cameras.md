@@ -10,7 +10,7 @@ Cameras are configured under `robot.cameras`, as a dict from camera name to came
 from robo_rollout.cameras.config import RealSenseCameraConfig, ZedCameraConfig
 
 cameras = {
-    "wrist_camera": ZedCameraConfig(id=14846828),
+    "wrist_camera": ZedCameraConfig(id=12345678),
     "top_camera": RealSenseCameraConfig(id="123456789012", width=640, height=360),
 }
 ```

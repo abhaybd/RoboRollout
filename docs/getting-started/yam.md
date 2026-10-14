@@ -26,6 +26,35 @@ Before each episode, both arms move to their home positions and open their gripp
 !!! warning
     The arms go limp when the script exits, so make sure the home position is one they can safely rest in.
 
+## Configuring your setup
+
+Before your first run, point the config at your hardware. Edit the defaults in [`scripts/yam/config.py`](https://github.com/abhaybd/RoboRollout/blob/main/scripts/yam/config.py), so you don't have to pass them every time. You can also override any setting on the command line for a single run (see [Configuration](../usage/configuration.md)).
+
+1. **Arms**: set `robot.arm_type` and `robot.gripper_type` to match your arms. If your CAN interfaces aren't named as in i2rt's bimanual setup (`can_follower_l` and `can_follower_r`), set `robot.left_channel` and `robot.right_channel`.
+2. **Cameras**: set the serial number (`id`) of each camera in `robot.cameras`. The RealSense SDK's `rs-enumerate-devices` tool can list the serial numbers of connected cameras.
+
+    ```python
+    cameras: Dict[str, CameraConfig] = field(default_factory=lambda: {
+        "top_camera": RealSenseCameraConfig(id="123456789012", width=640, height=360),
+        "left_wrist_camera": RealSenseCameraConfig(id="234567890123", width=640, height=360),
+        "right_wrist_camera": RealSenseCameraConfig(id="345678901234", width=640, height=360),
+    })
+    ```
+
+    If your setup has a different set of cameras, add or remove entries to match (see [Cameras](../usage/cameras.md)).
+3. **Home pose**: `autohome.left_home_jointpos` and `autohome.right_home_jointpos` default to the folded rest pose. If you change them, make sure the arms can safely go limp there, since they do when the script exits.
+4. **Policy cameras**: `policy_cameras` sets which cameras the policy sees, and under which observation keys. By default, the policy sees all three cameras, under their own names. Change it to match what your policy expects.
+5. **Policy server**: if your policy server isn't running on the same machine on port 8000, set `policy_host` and `policy_port`.
+6. **W&B** (optional): logging is off by default. To log episodes, set `wandb.enabled=true`, `wandb.entity`, and `wandb.project` (see [Running evaluations](../usage/running-evaluations.md#weights-biases)).
+
+To check your config, print it without connecting to anything:
+
+```bash
+uv run run_policy.py --cfg job
+```
+
+Settings still shown as `???` have to be set before running, apart from `task`, which you pass when you run.
+
 ## Observations and actions
 
 Your policy server receives the following observation each step (see [Policy servers](../usage/policy-servers.md)):
@@ -65,8 +94,3 @@ The defaults are set in [`scripts/yam/config.py`](https://github.com/abhaybd/Rob
 | `autohome.duration` | `4.0` | Seconds to take moving home |
 
 Policies run at 30 Hz (`policy_dt=0.03333`), and episodes time out after 45 seconds of nominal time. All three cameras are sent to the policy at their full resolution.
-
-!!! warning "Required settings"
-    The cameras' serial numbers have no defaults, so set them to match your cameras, e.g. `robot.cameras.top_camera.id=<serial>`.
-
-    W&B logging is enabled by default with the maintainers' entity and project. Set `wandb.entity` and `wandb.project` to your own, or disable it with `wandb.enabled=false`.

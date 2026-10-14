@@ -52,7 +52,7 @@ Modify the defaults in the [eval config](config.py) to match your hardware setup
  * `robot.cameras` to match your camera configuration (including camera ID!). Each camera type has its own config class in [`robo_rollout/cameras/config.py`](/robo_rollout/cameras/config.py).
  * `policy_cameras` to select which cameras to include in policy observations, where the key is the name in the observation and the value is the camera name in `robot.cameras`
 
-If you wish, you can also enable W&B support (upload rollout videos by filling out the `wandb` block of the config and setting `wandb.enabled` to `true`).
+If you wish, you can also enable W&B support (upload rollout videos by setting `wandb.enabled` to `true` and filling out `wandb.entity` and `wandb.project`).
 
 ### Running your policy
 

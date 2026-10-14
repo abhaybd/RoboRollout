@@ -50,9 +50,8 @@ class YamConfig(RolloutConfig):
         method=ResizeMethod.center_pad,
     ))
     wandb: WandbConfig = field(default_factory=lambda: WandbConfig(
-        enabled=True,
-        entity="adeshpande-princeton-university",
-        project="synthetic-wm-evals",
+        # set wandb.enabled=true, wandb.entity, and wandb.project to log episodes to W&B
+        enabled=False,
         name="yam_eval",
     ))
 

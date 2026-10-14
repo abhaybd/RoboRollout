@@ -23,12 +23,12 @@ class AutohomeConfig:
 
 @dataclass
 class DroidRobotConfig(RobotConfig):
-    robot_host: str = "172.16.0.2"
+    robot_host: str = MISSING
     gripper: GripperConfig = field(default_factory=GripperConfig)
     cameras: Dict[str, CameraConfig] = field(default_factory=lambda: {
-        "wrist_camera": ZedCameraConfig(id=14846828),
-        "exo_camera_1": ZedCameraConfig(id=31425515),
-        "exo_camera_2": ZedCameraConfig(id=32439448),
+        "wrist_camera": ZedCameraConfig(id=MISSING),
+        "exo_camera_1": ZedCameraConfig(id=MISSING),
+        "exo_camera_2": ZedCameraConfig(id=MISSING),
     })
 
 
@@ -37,8 +37,10 @@ class DroidConfig(RolloutConfig):
     robot: DroidRobotConfig = field(default_factory=DroidRobotConfig)
 
     policy_dt: float = 0.066
+    # maps policy observation keys to names of cameras in robot.cameras
+    # here, the policy takes in only the wrist camera and the first exo camera
     policy_cameras: Dict[str, str] = field(default_factory=lambda: {
-        "exo_camera_1": MISSING,
+        "exo_camera_1": "exo_camera_1",
         "wrist_camera": "wrist_camera",
     })
     nominal_timeout: Optional[float] = 45.0
@@ -49,9 +51,8 @@ class DroidConfig(RolloutConfig):
         method=ResizeMethod.downsample,
     ))
     wandb: WandbConfig = field(default_factory=lambda: WandbConfig(
-        enabled=True,
-        entity="adeshpande-princeton-university",
-        project="synthetic-wm-evals",
+        # set wandb.enabled=true, wandb.entity, and wandb.project to log episodes to W&B
+        enabled=False,
         name="franka_eval",
     ))
 
