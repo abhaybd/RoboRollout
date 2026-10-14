@@ -13,17 +13,29 @@ The following robots are supported:
 - Franka / DROID (via Polymetis)
 - Bimanual i2rt YAM
 
+To run off-the-shelf policies and VLAs (openpi, MolmoBot, LeRobot, ...) with RoboRollout, see [RoboRollout-VLA](https://github.com/abhaybd/RoboRollout_VLA), which provides ready-made policy servers.
+
+## Features
+
+- **Policy server and client**: Policies run behind a websocket server, so they can run on a separate (e.g. GPU) machine from the robot. To serve your own policy, subclass [`InferencePolicy`](robo_rollout/policy/policy_server.py) and pass it to `WebsocketPolicyServer`. The policy is reset at the start of each episode.
+- **Fixed-rate control loop**: The observe-infer-act loop runs at a fixed rate, and reports loop overruns, optionally broken down by which part of the step (observation, inference, or action) went over budget.
+- **Cameras**: All cameras share a common interface. Frames are resized to the policy's input size (by center padding, center cropping, or downsampling), and camera names are mapped to the policy's observation keys in the config.
+- **Recording**: Each episode saves its observations, actions, and two videos per camera:
+  - `<camera>.mp4` is synced with the observations: it has exactly one frame per control step, the frame the policy saw. Use it to see what the policy was given at each step.
+  - `<camera>_rt.mp4` is real-time: a background thread captures it at the control rate, regardless of how long each step takes. If steps overrun (e.g. due to slow inference), the observation-synced video plays back faster than real life, while this one still shows how the robot actually moved.
+- **Evaluation**: You're prompted for a task before each episode and for success after it, and the results are saved alongside the episode.
+- **Weights & Biases integration**: Each episode can be logged as its own W&B run, with its success, length, and task, videos from every camera, saved observations and actions, and the full config and policy server metadata. This makes it easy to compare success rates and watch rollouts across policies and tasks.
+- **Configuration**: Settings are [Hydra](https://hydra.cc/) structured configs, so they can be overridden from the command line and are checked before connecting to the robot.
+
 ## Installation
 
-To use, clone and install this repository:
+Please see the [robot-specific documentation](/scripts) for specific installation instructions for usage with the off-the-shelf supported platforms.
+
+For custom use-cases or robots, simply install RoboRollout as a project dependency:
 
 ```bash
-git clone https://github.com/abhaybd/RoboRollout.git
-cd robo_rollout
-pip install -e .
+pip install "robo_rollout @ git+https://github.com/abhaybd/RoboRollout.git"
 ```
-
-See [robot-specific documentation](/scripts) for more specific installation instructions.
 
 ### Optional dependencies
 
