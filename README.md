@@ -28,6 +28,7 @@ To run off-the-shelf policies and VLAs (openpi, MolmoBot, LeRobot, ...) with Rob
 - **Evaluation**: You're prompted for a task before each episode and for success after it, and the results are saved alongside the episode.
 - **Weights & Biases integration**: Each episode can be logged as its own W&B run, with its success, length, and task, videos from every camera, saved observations and actions, and the full config and policy server metadata. This makes it easy to compare success rates and watch rollouts across policies and tasks.
 - **Configuration**: Settings are [Hydra](https://hydra.cc/) structured configs, so they can be overridden from the command line and are checked before connecting to the robot.
+- **Export LeRobot Datasets**: Saved episodes, from disk or W&B, can be filtered by date and metadata (e.g. only successes) and collated into a [LeRobot](https://github.com/huggingface/lerobot) dataset, optionally uploaded to the HuggingFace Hub. See [Collating datasets](#collating-datasets).
 
 ## Installation
 
@@ -47,6 +48,22 @@ Camera-specific packages/libraries are included as optional dependencies, or ext
 - `realsense`
 
 The ZED SDK's python bindings (`pyzed`) aren't on PyPI, so to use ZED cameras, install the [ZED SDK](https://www.stereolabs.com/developers/release) and then its python bindings into your environment by running `python /usr/local/zed/get_python_api.py`.
+
+## Collating datasets
+
+[`scripts/collate_lerobot.py`](scripts/collate_lerobot.py) collates saved episodes into a LeRobot dataset. Sources can be local output directories or W&B projects (as `wandb:<entity>/<project>`), and episodes can be filtered by date (`--since`, `--until`) and by any metadata (`--filter KEY<op>VALUE`). Run it with [uv](https://docs.astral.sh/uv/), which installs its dependencies:
+
+```bash
+# list the episodes that would be collated
+uv run scripts/collate_lerobot.py outputs/ wandb:my-entity/droid-evals \
+    --repo-id my-hf-user/droid-pick-mug --since 2026-10-07 --filter success=true --dry-run
+
+# collate them, and upload the dataset to the Hugging Face Hub
+uv run scripts/collate_lerobot.py outputs/ wandb:my-entity/droid-evals \
+    --repo-id my-hf-user/droid-pick-mug --since 2026-10-07 --filter success=true --upload
+```
+
+See the [documentation](https://abhaybd.github.io/RoboRollout/usage/collating-datasets/) for all options.
 
 ## Adding a new robot
 

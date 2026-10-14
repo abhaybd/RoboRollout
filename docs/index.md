@@ -29,6 +29,7 @@ The following robots are supported:
 - **Evaluation**: You're prompted for a task before each episode and for success after it, and the results are saved alongside the episode.
 - **Weights & Biases integration**: Each episode can be logged as its own W&B run, with its success, length, and task, videos from every camera, saved observations and actions, and the full config and policy server metadata. This makes it easy to compare success rates and watch rollouts across policies and tasks.
 - **Configuration**: Settings are [Hydra](https://hydra.cc/) structured configs, so they can be overridden from the command line and are checked before connecting to the robot. See [Configuration](usage/configuration.md).
+- **Export LeRobot Datasets**: Saved episodes, from disk or W&B, can be filtered by date and metadata (e.g. only successes) and collated into a [LeRobot](https://github.com/huggingface/lerobot) dataset, optionally uploaded to the HuggingFace Hub. See [Collating datasets](usage/collating-datasets.md).
 
 ## How it fits together
 

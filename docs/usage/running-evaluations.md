@@ -104,3 +104,7 @@ To log episodes to [W&B](https://wandb.ai), set `wandb.enabled=true` and fill in
 - `observations.npz` and `actions.npz`, as run files
 
 The run's notes default to the task, so you can tell runs apart at a glance. To compare policies, group runs by a config value such as `policy_metadata.model_name`, and average `success_rate`.
+
+## Collating episodes into a dataset
+
+Saved episodes, whether on disk or in W&B, can be collated into a LeRobot dataset. See [Collating datasets](collating-datasets.md).

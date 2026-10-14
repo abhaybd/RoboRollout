@@ -36,6 +36,7 @@ nav:
       - Configuration: usage/configuration.md
       - Policy servers: usage/policy-servers.md
       - Cameras: usage/cameras.md
+      - Collating datasets: usage/collating-datasets.md
       - Adding a new robot: usage/adding-a-robot.md
   - API Reference:
       - robo_rollout.rollout: api/rollout.md
