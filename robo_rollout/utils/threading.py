@@ -9,6 +9,8 @@ from robo_rollout.utils.video import VideoWriter
 
 
 class ThreadedPeriodicGetter:
+    """Calls a function every period seconds on a background thread, keeping the latest result."""
+
     def __init__(self, func: Callable[[], Any], period: float):
         self._func = func
         self._period = period
@@ -44,6 +46,11 @@ class ThreadedPeriodicGetter:
 
 
 class AsyncMultiVideoWriter:
+    """
+    Writes frames to multiple VideoWriters on a background thread, so writing doesn't block the caller.
+    Errors from the writers are raised on close().
+    """
+
     def __init__(self, video_writers: Dict[str, VideoWriter]):
         self._video_writers = video_writers
         self._frame_queue: "Queue[Optional[Tuple[str, np.ndarray]]]" = Queue()

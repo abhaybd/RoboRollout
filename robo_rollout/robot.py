@@ -38,4 +38,5 @@ class BaseRobot(ABC):
         pass
 
     def close(self):
+        """Release the robot. Called once, when run() exits."""
         pass

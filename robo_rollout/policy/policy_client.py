@@ -13,6 +13,14 @@ class PolicyClient:
     """
 
     def __init__(self, host: str = "0.0.0.0", port: Optional[int] = None, api_key: Optional[str] = None):
+        """
+        Connect to a policy server, blocking until it's available.
+
+        Args:
+            host: The host of the server, or a full ws:// or wss:// URI.
+            port: The port of the server, or None to use the port in host, if any.
+            api_key: If given, sent in the Authorization header as "Api-Key <api_key>".
+        """
         if host.startswith("ws"):
             self._uri = host
         else:
@@ -23,6 +31,7 @@ class PolicyClient:
         self._ws, self._server_metadata = self._wait_for_server()
 
     def get_server_metadata(self) -> dict:
+        """Get the metadata the server sent when the client connected."""
         return self._server_metadata
 
     def _wait_for_server(self) -> Tuple[websockets.sync.client.ClientConnection, dict]:
@@ -40,6 +49,7 @@ class PolicyClient:
                 time.sleep(5)
 
     def infer(self, obs: dict) -> dict:
+        """Send an observation to the server and return its action. Raises RuntimeError if the server fails."""
         data = msgpack_numpy.packb(obs)
         self._ws.send(data)
         response = self._ws.recv()
@@ -52,6 +62,7 @@ class PolicyClient:
         pass
 
     def close(self) -> None:
+        """Close the connection to the server."""
         if self._ws is not None:
             self._ws.close()
             self._ws = None

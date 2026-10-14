@@ -2,6 +2,7 @@ from robo_rollout.cameras.abstract import BaseCamera
 from robo_rollout.cameras.config import CameraConfig
 
 def create_camera(camera_cfg: CameraConfig) -> BaseCamera:
+    """Open the camera described by camera_cfg, with the implementation matching its type."""
     if camera_cfg.type == "zed":
         from robo_rollout.cameras.zed import ZedCamera
         return ZedCamera(camera_cfg)

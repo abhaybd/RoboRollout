@@ -25,6 +25,13 @@ realsense = [
 test = [
     "pytest",
 ]
+docs = [
+    # mkdocs 2 removes the plugin system, which mkdocstrings needs
+    "mkdocs<2",
+    "mkdocs-material",
+    "mkdocstrings[python]",
+    "ruff",  # used by mkdocstrings to format signatures
+]
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]

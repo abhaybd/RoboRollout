@@ -11,6 +11,7 @@ class MutableNullableFloat:
 
 @contextmanager
 def measure_elapsed():
+    """Context manager that measures the time spent in its block, in seconds, available as .value on exit."""
     start_time = time.monotonic()
     mnf = MutableNullableFloat()
     yield mnf
@@ -40,6 +41,7 @@ def multi_closing(*resources):
 
 
 def suppress_decorator(*exceptions):
+    """Decorator version of contextlib.suppress()."""
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -50,6 +52,7 @@ def suppress_decorator(*exceptions):
 
 
 def flatten_dict(d, pfx=""):
+    """Flatten a nested dict into a flat dict, joining keys with "/"."""
     ret = {}
     for k, v in d.items():
         if isinstance(v, dict):
@@ -60,6 +63,7 @@ def flatten_dict(d, pfx=""):
 
 
 def lod_to_dol(lod):
+    """Convert a list of (possibly nested) dicts into a flat dict of lists. See flatten_dict()."""
     ret = defaultdict(list)
     for d in lod:
         flat_d = flatten_dict(d)

@@ -3,7 +3,10 @@ from abc import ABC, abstractmethod
 import numpy as np
 
 class BaseCamera(ABC):
+    """A camera that captures RGB frames. Create one from a config with robo_rollout.cameras.camera.create_camera()."""
+
     def close(self):
+        """Stop capturing and release the camera."""
         pass
 
     @abstractmethod
@@ -18,4 +21,5 @@ class BaseCamera(ABC):
 
 
 class CameraException(IOError):
+    """Raised when a camera fails to open or capture frames."""
     pass

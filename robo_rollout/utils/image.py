@@ -29,6 +29,10 @@ def downsample(images: np.ndarray, height: int, width: int) -> np.ndarray:
 
 
 def resize_with_crop(images: np.ndarray, height: int, width: int, method=Image.BILINEAR) -> np.ndarray:
+    """
+    Resize a batch of images to fill the target size, preserving aspect ratio and center cropping the excess.
+    Images are in [..., height, width, channel] format.
+    """
     if images.shape[-3:-1] == (height, width):
         return images
     
