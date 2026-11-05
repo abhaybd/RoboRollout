@@ -23,6 +23,7 @@ class YamBimanualRobot(BaseRobot):
     Robot state:
         qpos/left_arm, qpos/right_arm: (6,) joint angles in radians
         qpos/left_gripper, qpos/right_gripper: (1,) in [0, 1], where 0 is open and 1 is closed
+        These are measured, or the last commanded positions if commanded_state is set.
 
     Policy actions:
         left_arm, right_arm: (6,) absolute joint position targets in radians,
@@ -47,6 +48,12 @@ class YamBimanualRobot(BaseRobot):
         except:
             self.close()
             raise
+        # last commanded joint positions (in i2rt's command space), starting from where the arms are
+        self.commanded_jointpos = {side: arm.get_joint_pos().copy() for side, arm in self.arms.items()}
+
+    def _command(self, side: str, joint_pos: np.ndarray):
+        self.arms[side].command_joint_pos(joint_pos)
+        self.commanded_jointpos[side] = joint_pos
 
     def _move_to(self, targets: Dict[str, np.ndarray], duration: float):
         """Linearly interpolate both arms to the target joint positions (in i2rt's command space) at once."""
@@ -54,8 +61,8 @@ class YamBimanualRobot(BaseRobot):
         n_steps = max(1, round(duration / 0.02))
         for i in range(1, n_steps + 1):
             alpha = i / n_steps
-            for side, arm in self.arms.items():
-                arm.command_joint_pos((1 - alpha) * starts[side] + alpha * targets[side])
+            for side in self.arms:
+                self._command(side, (1 - alpha) * starts[side] + alpha * targets[side])
             time.sleep(duration / n_steps)
 
     def reset(self):
@@ -71,13 +78,18 @@ class YamBimanualRobot(BaseRobot):
     def get_state(self):
         qpos = {}
         for side, arm in self.arms.items():
-            arm_obs = arm.get_observations()
-            qpos[f"{side}_arm"] = np.array(arm_obs["joint_pos"])
-            qpos[f"{side}_gripper"] = 1.0 - np.array(arm_obs["gripper_pos"])
+            if self.cfg.commanded_state:
+                joint_pos = self.commanded_jointpos[side]
+                arm_pos, gripper_pos = joint_pos[:6], joint_pos[6:]
+            else:
+                arm_obs = arm.get_observations()
+                arm_pos, gripper_pos = arm_obs["joint_pos"], arm_obs["gripper_pos"]
+            qpos[f"{side}_arm"] = np.array(arm_pos)
+            qpos[f"{side}_gripper"] = 1.0 - np.array(gripper_pos)
         return {"qpos": qpos}
 
     def apply_action(self, obs, action):
-        for side, arm in self.arms.items():
+        for side in self.arms:
             curr_jp = obs["qpos"][f"{side}_arm"]
             joint_delta = (np.asarray(action[f"{side}_arm"]) - curr_jp) * self.cfg.action_scale
             # limit the joint delta by rescaling it
@@ -89,7 +101,7 @@ class YamBimanualRobot(BaseRobot):
             action[f"{side}_arm"] = cmd_jp
             action[f"{side}_gripper"] = np.array([cmd_grip_pos])
 
-            arm.command_joint_pos(np.append(cmd_jp, 1.0 - cmd_grip_pos))
+            self._command(side, np.append(cmd_jp, 1.0 - cmd_grip_pos))
         return action
 
     def close(self):

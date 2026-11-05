@@ -20,9 +20,9 @@ class YamRobotConfig(RobotConfig):
     # i2rt ArmType and GripperType values, e.g. "yam", "yam_pro", "linear_4310", "crank_4310"
     arm_type: str = "yam"
     gripper_type: str = "linear_4310"
-    # CAN interfaces of the follower arms, named as in i2rt's bimanual setup
-    left_channel: str = "can_follower_l"
-    right_channel: str = "can_follower_r"
+    # CAN interfaces of the arms, named as in MolmoAct2's YAM setup
+    left_channel: str = "can_left"
+    right_channel: str = "can_right"
     cameras: Dict[str, CameraConfig] = field(default_factory=lambda: {
         # MolmoAct2 records 640x360 at 30 fps
         "top_camera": RealSenseCameraConfig(id=MISSING, width=640, height=360),
@@ -55,6 +55,9 @@ class YamConfig(RolloutConfig):
         name="yam_eval",
     ))
 
+    # report the last commanded joint positions as the robot state instead of the measured ones,
+    # as MolmoAct2's YAM driver does (and so as its training data was recorded)
+    commanded_state: bool = False
     action_scale: float = 1.0
     # MolmoAct2 instead splits each action into 0.01 rad sub-steps, one per control tick
     max_joint_delta: float = 0.2
