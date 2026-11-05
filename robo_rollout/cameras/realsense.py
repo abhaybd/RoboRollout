@@ -87,7 +87,7 @@ class RealSenseCamera(BaseCamera):
 
         # Ensure we only store the latest frame
         with self.bgr_stack_lock:
-            self.bgr_stack = [np.asanyarray(color_frame.get_data())[:, :, ::-1]]
+            self.bgr_stack = [np.asanyarray(color_frame.get_data())]
         with self.depth_stack_lock:
             self.depth_stack = [np.asanyarray(depth_frame.get_data())]
         self.timestamp.GetCurrentTime()
