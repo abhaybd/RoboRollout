@@ -16,5 +16,5 @@ package = false
 build-constraint-dependencies = ["scikit-build-core<0.10"]
 
 [tool.uv.sources]
-i2rt = { git = "https://github.com/i2rt-robotics/i2rt.git" }
+i2rt = { git = "https://github.com/abhaybd/i2rt.git" }  # pin to fork with bugfixes
 robo_rollout = { path = "../..", editable = true }
